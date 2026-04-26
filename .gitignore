@@ -1,0 +1,29 @@
+# --- .NET Build & Artifacts ---
+[Bb]in/
+[Oo]bj/
+# Ignore AOT temporary artifacts
+*.sync
+*.swp
+
+# --- User Secrets & Local Environment ---
+# Specifically ignore development settings that contain your Neon connection string
+appsettings.Development.json
+.env
+.env.local
+.env.*.local
+
+# --- IDE & System Files ---
+.vs/
+.vscode/
+*.user
+*.userosscache
+*.sln.docstates
+.DS_Store
+Thumbs.db
+
+# --- Tools & Packages ---
+.paket/
+.fake/
+.cache/
+# Ignore local tool manifests if they contain user-specific paths
+.dotnet/

@@ -1,15 +1,51 @@
 using System.Text.Json.Serialization;
-using Microsoft.AspNetCore.Http.HttpResults;
+using KindleKeep.Api.Core.Entities;
+using KindleKeep.Api.Infrastructure.Data;
+using Microsoft.EntityFrameworkCore;
+using Npgsql;
 
 var builder = WebApplication.CreateSlimBuilder(args);
 
+builder.Services.AddHttpClient("GitHub", client =>
+{
+    client.DefaultRequestHeaders.Add("Accept", "application/json");
+    client.DefaultRequestHeaders.Add("User-Agent", "KindleKeep-Auth-Agent");
+});
+
+// Configure AOT-compatible JSON serialization
 builder.Services.ConfigureHttpJsonOptions(options =>
 {
     options.SerializerOptions.TypeInfoResolverChain.Insert(0, AppJsonSerializerContext.Default);
 });
 
-// Learn more about configuring OpenAPI at https://aka.ms/aspnet/openapi
 builder.Services.AddOpenApi();
+
+// --- Infrastructure & Database Configuration ---
+
+// Dynamically load the connection string from appsettings or environment variables
+var connectionString = builder.Configuration.GetConnectionString("DefaultConnection") 
+    ?? throw new InvalidOperationException("Database connection string is missing.");
+
+// 1. Create a Native AOT-friendly Npgsql DataSource
+var dataSourceBuilder = new NpgsqlDataSourceBuilder(connectionString);
+var dataSource = dataSourceBuilder.Build();
+
+// 2. Register DbContext using DbContextPool to minimize memory allocation
+builder.Services.AddDbContextPool<KindleDbContext>(options =>
+{
+    options.UseNpgsql(dataSource, npgsqlOptions =>
+    {
+        npgsqlOptions.CommandTimeout(15);
+        npgsqlOptions.EnableRetryOnFailure(
+            maxRetryCount: 3,
+            maxRetryDelay: TimeSpan.FromSeconds(5),
+            errorCodesToAdd: null);
+    });
+
+    options.UseModel(KindleKeep.Api.Infrastructure.Data.CompiledModels.KindleDbContextModel.Instance);
+});
+
+builder.Services.AddSingleton<KindleKeep.Api.Infrastructure.Identity.TokenService>();
 
 var app = builder.Build();
 
@@ -18,31 +54,22 @@ if (app.Environment.IsDevelopment())
     app.MapOpenApi();
 }
 
-Todo[] sampleTodos =
-[
-    new(1, "Walk the dog"),
-    new(2, "Do the dishes", DateOnly.FromDateTime(DateTime.Now)),
-    new(3, "Do the laundry", DateOnly.FromDateTime(DateTime.Now.AddDays(1))),
-    new(4, "Clean the bathroom"),
-    new(5, "Clean the car", DateOnly.FromDateTime(DateTime.Now.AddDays(2)))
-];
-
-var todosApi = app.MapGroup("/todos");
-todosApi.MapGet("/", () => sampleTodos)
-        .WithName("GetTodos");
-
-todosApi.MapGet("/{id}", Results<Ok<Todo>, NotFound> (int id) =>
-    sampleTodos.FirstOrDefault(a => a.Id == id) is { } todo
-        ? TypedResults.Ok(todo)
-        : TypedResults.NotFound())
-    .WithName("GetTodoById");
+// Minimal health check endpoint utilizing a strongly-typed record
+app.MapGet("/health", () => TypedResults.Ok(new HealthResponse("Healthy", DateTime.UtcNow)))
+   .WithName("GetHealthStatus");
 
 app.Run();
 
-public record Todo(int Id, string? Title, DateOnly? DueBy = null, bool IsComplete = false);
+// 1. Define the explicit record
+public record HealthResponse(string Status, DateTime Timestamp);
 
-[JsonSerializable(typeof(Todo[]))]
+// 2. Update the JSON context to explicitly register the new record
+[JsonSerializable(typeof(User))]
+[JsonSerializable(typeof(MonitorTarget))]
+[JsonSerializable(typeof(HealthResponse))]
+[JsonSerializable(typeof(KindleKeep.Api.Core.DTOs.GithubTokenResponse))]
+[JsonSerializable(typeof(KindleKeep.Api.Core.DTOs.GithubUserResponse))]
+[JsonSerializable(typeof(KindleKeep.Api.Core.DTOs.AuthResponse))]
 internal partial class AppJsonSerializerContext : JsonSerializerContext
 {
-
 }
