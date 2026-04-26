@@ -12,18 +12,27 @@ namespace KindleKeep.Api.Infrastructure.Data.CompiledModels
     public partial class KindleDbContextModel
     {
         private KindleDbContextModel()
-            : base(skipDetectChanges: false, modelId: new Guid("e8f72ff0-1d95-445c-8e82-96636ce51a6e"), entityTypeCount: 2)
+            : base(skipDetectChanges: false, modelId: new Guid("9189cef7-6283-40bf-be43-34e34abfd0d6"), entityTypeCount: 5)
         {
         }
 
         partial void Initialize()
         {
+            var alertIncident = AlertIncidentEntityType.Create(this);
             var monitorTarget = MonitorTargetEntityType.Create(this);
+            var securityAudit = SecurityAuditEntityType.Create(this);
+            var uptimeLog = UptimeLogEntityType.Create(this);
             var user = UserEntityType.Create(this);
 
+            AlertIncidentEntityType.CreateForeignKey1(alertIncident, monitorTarget);
             MonitorTargetEntityType.CreateForeignKey1(monitorTarget, user);
+            SecurityAuditEntityType.CreateForeignKey1(securityAudit, monitorTarget);
+            UptimeLogEntityType.CreateForeignKey1(uptimeLog, monitorTarget);
 
+            AlertIncidentEntityType.CreateAnnotations(alertIncident);
             MonitorTargetEntityType.CreateAnnotations(monitorTarget);
+            SecurityAuditEntityType.CreateAnnotations(securityAudit);
+            UptimeLogEntityType.CreateAnnotations(uptimeLog);
             UserEntityType.CreateAnnotations(user);
 
             AddAnnotation("Npgsql:ValueGenerationStrategy", NpgsqlValueGenerationStrategy.IdentityByDefaultColumn);

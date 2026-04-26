@@ -3,6 +3,7 @@ using System;
 using KindleKeep.Api.Infrastructure.Data;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 
@@ -11,9 +12,11 @@ using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 namespace kindlekeep_api.Infrastructure.Data.Migrations
 {
     [DbContext(typeof(KindleDbContext))]
-    partial class KindleDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260426141622_AddTelemetryTables")]
+    partial class AddTelemetryTables
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -21,41 +24,6 @@ namespace kindlekeep_api.Infrastructure.Data.Migrations
                 .HasAnnotation("Relational:MaxIdentifierLength", 63);
 
             NpgsqlModelBuilderExtensions.UseIdentityByDefaultColumns(modelBuilder);
-
-            modelBuilder.Entity("KindleKeep.Api.Core.Entities.AlertIncident", b =>
-                {
-                    b.Property<Guid>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("uuid");
-
-                    b.Property<DateTime>("CreatedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<string>("IncidentHash")
-                        .IsRequired()
-                        .HasColumnType("text");
-
-                    b.Property<string>("IncidentType")
-                        .IsRequired()
-                        .HasColumnType("text");
-
-                    b.Property<bool>("IsResolved")
-                        .HasColumnType("boolean");
-
-                    b.Property<Guid>("MonitorId")
-                        .HasColumnType("uuid");
-
-                    b.Property<DateTime?>("ResolvedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("IncidentHash");
-
-                    b.HasIndex("MonitorId");
-
-                    b.ToTable("AlertIncidents");
-                });
 
             modelBuilder.Entity("KindleKeep.Api.Core.Entities.MonitorTarget", b =>
                 {
@@ -217,17 +185,6 @@ namespace kindlekeep_api.Infrastructure.Data.Migrations
                         .IsUnique();
 
                     b.ToTable("Users");
-                });
-
-            modelBuilder.Entity("KindleKeep.Api.Core.Entities.AlertIncident", b =>
-                {
-                    b.HasOne("KindleKeep.Api.Core.Entities.MonitorTarget", "Monitor")
-                        .WithMany()
-                        .HasForeignKey("MonitorId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
-
-                    b.Navigation("Monitor");
                 });
 
             modelBuilder.Entity("KindleKeep.Api.Core.Entities.MonitorTarget", b =>
