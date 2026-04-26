@@ -1,0 +1,11 @@
+@kindlekeep_api_HostAddress = http://localhost:5247
+
+GET {{kindlekeep_api_HostAddress}}/todos/
+Accept: application/json
+
+###
+
+GET {{kindlekeep_api_HostAddress}}/todos/1
+Accept: application/json
+
+###
