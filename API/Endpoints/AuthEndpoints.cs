@@ -4,9 +4,9 @@ using Microsoft.AspNetCore.WebUtilities;
 using KindleKeep.Api.Core.DTOs;
 using KindleKeep.Api.Core.Entities;
 using KindleKeep.Api.Core.Enums;
-using KindleKeep.Api.Infrastructure.Data;
 using KindleKeep.Api.Infrastructure.Identity;
-using Microsoft.EntityFrameworkCore;
+using Npgsql;
+using NpgsqlTypes;
 
 namespace KindleKeep.Api.API.Endpoints;
 
@@ -38,14 +38,14 @@ public static class AuthEndpoints
             [FromQuery] string state,
             IConfiguration configuration,
             IHttpClientFactory httpClientFactory,
-            KindleDbContext dbContext,
+            [FromServices] NpgsqlDataSource dataSource,
             TokenService tokenService,
             HttpContext context) =>
         {
             return await ProcessOAuthCallbackAsync(
                 code, AuthProvider.GitHub, "Authentication:GitHub",
                 "https://github.com/login/oauth/access_token", "https://api.github.com/user",
-                configuration, httpClientFactory, dbContext, tokenService, context);
+                configuration, httpClientFactory, dataSource, tokenService, context);
         });
 
         group.MapGet("/login/google", (IConfiguration configuration, HttpContext context) =>
@@ -71,14 +71,14 @@ public static class AuthEndpoints
             [FromQuery] string state,
             IConfiguration configuration,
             IHttpClientFactory httpClientFactory,
-            KindleDbContext dbContext,
+            [FromServices] NpgsqlDataSource dataSource,
             TokenService tokenService,
             HttpContext context) =>
         {
             return await ProcessOAuthCallbackAsync(
                 code, AuthProvider.Google, "Authentication:Google",
                 "https://oauth2.googleapis.com/token", "https://www.googleapis.com/oauth2/v2/userinfo",
-                configuration, httpClientFactory, dbContext, tokenService, context);
+                configuration, httpClientFactory, dataSource, tokenService, context);
         });
 
         group.MapGet("/login/gitlab", (IConfiguration configuration, HttpContext context) =>
@@ -104,20 +104,19 @@ public static class AuthEndpoints
             [FromQuery] string state,
             IConfiguration configuration,
             IHttpClientFactory httpClientFactory,
-            KindleDbContext dbContext,
+            [FromServices] NpgsqlDataSource dataSource,
             TokenService tokenService,
             HttpContext context) =>
         {
             return await ProcessOAuthCallbackAsync(
                 code, AuthProvider.GitLab, "Authentication:GitLab",
                 "https://gitlab.com/oauth/token", "https://gitlab.com/api/v4/user",
-                configuration, httpClientFactory, dbContext, tokenService, context);
+                configuration, httpClientFactory, dataSource, tokenService, context);
         });
 
         return endpoints;
     }
 
-    // Complex logic: Standardizes the OAuth token exchange and extracts normalized profile data dynamically based on the AuthProvider.
     private static async Task<IResult> ProcessOAuthCallbackAsync(
         string code,
         AuthProvider provider,
@@ -126,7 +125,7 @@ public static class AuthEndpoints
         string userUrl,
         IConfiguration configuration,
         IHttpClientFactory httpClientFactory,
-        KindleDbContext dbContext,
+        NpgsqlDataSource dataSource,
         TokenService tokenService,
         HttpContext context)
     {
@@ -203,27 +202,44 @@ public static class AuthEndpoints
             avatarUrl = profile.AvatarUrl;
         }
 
-        var user = await dbContext.Users.FirstOrDefaultAsync(u => u.ExternalId == externalId && u.AuthProvider == provider);
+        var newUserId = Guid.NewGuid();
+        Guid finalUserId;
 
-        if (user == null)
-        {
-            user = new User
-            {
-                ExternalId = externalId,
-                AuthProvider = provider,
-                Email = email,
-                DisplayName = displayName,
-                AvatarUrl = avatarUrl
-            };
-            dbContext.Users.Add(user);
-        }
-        else
-        {
-            user.DisplayName = displayName;
-            user.AvatarUrl = avatarUrl;
-        }
+        var defaultMonitorLimit = configuration.GetValue<int>("Users:DefaultMonitorLimit", 5);
 
-        await dbContext.SaveChangesAsync();
+        // Native AOT compliant PostgreSQL Upsert utilizing strictly typed parameters to bypass EF Core dynamic evaluation.
+        await using var connection = await dataSource.OpenConnectionAsync();
+        await using var command = connection.CreateCommand();
+        command.CommandText = @"
+            INSERT INTO ""Users"" (""Id"", ""ExternalId"", ""AuthProvider"", ""Email"", ""DisplayName"", ""AvatarUrl"", ""MonitorLimit"")
+            VALUES ($1, $2, $3, $4, $5, $6, $7)
+            ON CONFLICT (""ExternalId"") 
+            DO UPDATE SET 
+                ""DisplayName"" = EXCLUDED.""DisplayName"",
+                ""AvatarUrl"" = EXCLUDED.""AvatarUrl"",
+                ""Email"" = EXCLUDED.""Email""
+            RETURNING ""Id"";";
+
+        command.Parameters.Add(new NpgsqlParameter { NpgsqlDbType = NpgsqlDbType.Uuid, Value = newUserId });
+        command.Parameters.Add(new NpgsqlParameter { NpgsqlDbType = NpgsqlDbType.Text, Value = externalId });
+        command.Parameters.Add(new NpgsqlParameter { NpgsqlDbType = NpgsqlDbType.Integer, Value = (int)provider });
+        command.Parameters.Add(new NpgsqlParameter { NpgsqlDbType = NpgsqlDbType.Text, Value = email });
+        command.Parameters.Add(new NpgsqlParameter { NpgsqlDbType = NpgsqlDbType.Text, Value = displayName });
+        command.Parameters.Add(new NpgsqlParameter { NpgsqlDbType = NpgsqlDbType.Text, Value = string.IsNullOrEmpty(avatarUrl) ? string.Empty : avatarUrl });
+        command.Parameters.Add(new NpgsqlParameter { NpgsqlDbType = NpgsqlDbType.Integer, Value = defaultMonitorLimit });
+
+        var returnedIdObj = await command.ExecuteScalarAsync();
+        finalUserId = returnedIdObj != null ? (Guid)returnedIdObj : newUserId;
+
+        var user = new User
+        {
+            Id = finalUserId,
+            ExternalId = externalId,
+            AuthProvider = provider,
+            Email = email,
+            DisplayName = displayName,
+            AvatarUrl = string.IsNullOrEmpty(avatarUrl) ? string.Empty : avatarUrl
+        };
 
         var jwtToken = tokenService.GenerateToken(user);
         var authResponse = new AuthResponse(jwtToken, user.DisplayName, user.AvatarUrl);

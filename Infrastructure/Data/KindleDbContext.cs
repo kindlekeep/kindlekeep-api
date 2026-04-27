@@ -13,9 +13,6 @@ public class KindleDbContext(DbContextOptions<KindleDbContext> options) : DbCont
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
-        // Complex logic: Relies entirely on the pre-compiled Native AOT models.
-        // Extraneous configuration here will trigger runtime reflection and model discovery, 
-        // which causes the binary to crash.
         base.OnModelCreating(modelBuilder);
     }
 }

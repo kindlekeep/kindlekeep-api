@@ -1,13 +1,12 @@
 using System.Security.Claims;
 using KindleKeep.Api.Core.DTOs;
-using KindleKeep.Api.Core.Entities;
 using KindleKeep.Api.Core.Enums;
-using KindleKeep.Api.Infrastructure.Data;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Routing;
 using Npgsql;
+using NpgsqlTypes;
 
 namespace KindleKeep.Api.API.Endpoints;
 
@@ -17,8 +16,6 @@ public static class MonitorEndpoints
     {
         var group = endpoints.MapGroup("/api/monitors").RequireAuthorization();
 
-        // Complex logic: [FromServices] explicitly flags the data source as a DI dependency 
-        // to bypass the JSON deserializer in the Native AOT pipeline.
         group.MapGet("/", async ([FromServices] NpgsqlDataSource dataSource, HttpContext context) =>
         {
             var userIdClaim = context.User.FindFirst(ClaimTypes.NameIdentifier)?.Value 
@@ -34,7 +31,7 @@ public static class MonitorEndpoints
             await using var connection = await dataSource.OpenConnectionAsync();
             await using var command = connection.CreateCommand();
             command.CommandText = "SELECT \"Id\", \"Url\", \"FriendlyName\", \"CurrentUptimeStatus\", \"CurrentSecurityGrade\", \"IsActive\" FROM \"MonitorTargets\" WHERE \"UserId\" = $1";
-            command.Parameters.Add(new NpgsqlParameter { Value = userId });
+            command.Parameters.Add(new NpgsqlParameter { NpgsqlDbType = NpgsqlDbType.Uuid, Value = userId });
 
             await using var reader = await command.ExecuteReaderAsync();
             while (await reader.ReadAsync())
@@ -52,7 +49,7 @@ public static class MonitorEndpoints
             return Results.Ok(monitors);
         });
 
-        group.MapPost("/", async (CreateMonitorRequest request, KindleDbContext dbContext, HttpContext context) =>
+        group.MapPost("/", async (CreateMonitorRequest request, [FromServices] NpgsqlDataSource dataSource, HttpContext context) =>
         {
             var userIdClaim = context.User.FindFirst(ClaimTypes.NameIdentifier)?.Value 
                 ?? context.User.FindFirst("sub")?.Value;
@@ -73,32 +70,42 @@ public static class MonitorEndpoints
                 return Results.BadRequest("Invalid URL format. Must be an absolute HTTP or HTTPS URI.");
             }
 
-            var monitor = new MonitorTarget
-            {
-                UserId = userId,
-                Url = request.Url,
-                FriendlyName = request.FriendlyName,
-                CurrentUptimeStatus = UptimeStatus.Healthy,
-                CurrentSecurityGrade = 'U',
-                IsActive = true
-            };
+            var monitorId = Guid.NewGuid();
 
-            dbContext.MonitorTargets.Add(monitor);
-            await dbContext.SaveChangesAsync();
+            await using var connection = await dataSource.OpenConnectionAsync();
+            await using var command = connection.CreateCommand();
+            
+            command.CommandText = @"
+                INSERT INTO ""MonitorTargets"" (""Id"", ""UserId"", ""Url"", ""FriendlyName"", ""IntervalMinutes"", ""RequestTimeout"", ""IsActive"", ""CurrentUptimeStatus"", ""CurrentSecurityGrade"", ""UpdatedAt"")
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+                RETURNING ""Id"";";
+
+            command.Parameters.Add(new NpgsqlParameter { NpgsqlDbType = NpgsqlDbType.Uuid, Value = monitorId });
+            command.Parameters.Add(new NpgsqlParameter { NpgsqlDbType = NpgsqlDbType.Uuid, Value = userId });
+            command.Parameters.Add(new NpgsqlParameter { NpgsqlDbType = NpgsqlDbType.Text, Value = request.Url });
+            command.Parameters.Add(new NpgsqlParameter { NpgsqlDbType = NpgsqlDbType.Text, Value = request.FriendlyName });
+            command.Parameters.Add(new NpgsqlParameter { NpgsqlDbType = NpgsqlDbType.Integer, Value = 10 });
+            command.Parameters.Add(new NpgsqlParameter { NpgsqlDbType = NpgsqlDbType.Integer, Value = 30 });
+            command.Parameters.Add(new NpgsqlParameter { NpgsqlDbType = NpgsqlDbType.Boolean, Value = true });
+            command.Parameters.Add(new NpgsqlParameter { NpgsqlDbType = NpgsqlDbType.Integer, Value = 0 });
+            command.Parameters.Add(new NpgsqlParameter { NpgsqlDbType = NpgsqlDbType.Text, Value = "U" });
+            command.Parameters.Add(new NpgsqlParameter { NpgsqlDbType = NpgsqlDbType.TimestampTz, Value = DateTime.UtcNow });
+
+            await command.ExecuteScalarAsync();
 
             var response = new MonitorResponse(
-                monitor.Id,
-                monitor.Url,
-                monitor.FriendlyName,
-                monitor.CurrentUptimeStatus,
-                monitor.CurrentSecurityGrade,
-                monitor.IsActive
+                monitorId,
+                request.Url,
+                request.FriendlyName,
+                (UptimeStatus)0,
+                'U',
+                true
             );
 
-            return Results.Created($"/api/monitors/{monitor.Id}", response);
+            return Results.Created($"/api/monitors/{monitorId}", response);
         });
 
-        group.MapDelete("/{id:guid}", async (Guid id, KindleDbContext dbContext, [FromServices] NpgsqlDataSource dataSource, HttpContext context) =>
+        group.MapDelete("/{id:guid}", async (Guid id, [FromServices] NpgsqlDataSource dataSource, HttpContext context) =>
         {
             var userIdClaim = context.User.FindFirst(ClaimTypes.NameIdentifier)?.Value 
                 ?? context.User.FindFirst("sub")?.Value;
@@ -108,33 +115,20 @@ public static class MonitorEndpoints
                 return Results.Unauthorized();
             }
 
+            // Complex logic: Combines authorization and deletion into a single atomic database operation.
             await using var connection = await dataSource.OpenConnectionAsync();
             await using var command = connection.CreateCommand();
-            command.CommandText = "SELECT \"UserId\" FROM \"MonitorTargets\" WHERE \"Id\" = $1";
-            command.Parameters.Add(new NpgsqlParameter { Value = id });
+            command.CommandText = "DELETE FROM \"MonitorTargets\" WHERE \"Id\" = $1 AND \"UserId\" = $2";
             
-            var ownerIdObj = await command.ExecuteScalarAsync();
-            if (ownerIdObj == null)
+            command.Parameters.Add(new NpgsqlParameter { NpgsqlDbType = NpgsqlDbType.Uuid, Value = id });
+            command.Parameters.Add(new NpgsqlParameter { NpgsqlDbType = NpgsqlDbType.Uuid, Value = userId });
+
+            var rowsAffected = await command.ExecuteNonQueryAsync();
+
+            if (rowsAffected == 0)
             {
                 return Results.NotFound();
             }
-            
-            var ownerId = (Guid)ownerIdObj;
-            if (ownerId != userId)
-            {
-                return Results.Forbid();
-            }
-
-            var monitor = new MonitorTarget 
-            { 
-                Id = id, 
-                UserId = ownerId,
-                Url = string.Empty,
-                FriendlyName = string.Empty
-            };
-            
-            dbContext.MonitorTargets.Remove(monitor);
-            await dbContext.SaveChangesAsync();
 
             return Results.NoContent();
         });

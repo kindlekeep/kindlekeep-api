@@ -62,7 +62,6 @@ var connectionString = builder.Configuration.GetConnectionString("DefaultConnect
 var dataSourceBuilder = new NpgsqlDataSourceBuilder(connectionString);
 var dataSource = dataSourceBuilder.Build();
 
-// Explicitly register the data source to prevent Minimal API from treating it as a JSON body parameter
 builder.Services.AddSingleton(dataSource);
 
 builder.Services.AddDbContextPool<KindleDbContext>(options =>
@@ -152,6 +151,9 @@ app.Run();
 
 [JsonSerializable(typeof(User))]
 [JsonSerializable(typeof(MonitorTarget))]
+[JsonSerializable(typeof(UptimeLog))]
+[JsonSerializable(typeof(SecurityAudit))]
+[JsonSerializable(typeof(AlertIncident))]
 [JsonSerializable(typeof(KindleKeep.Api.Core.DTOs.GithubTokenResponse))]
 [JsonSerializable(typeof(KindleKeep.Api.Core.DTOs.GithubUserResponse))]
 [JsonSerializable(typeof(KindleKeep.Api.Core.DTOs.GoogleTokenResponse))]
