@@ -6,6 +6,8 @@ using System.Text;
 using KindleKeep.Api.Core.Entities;
 using KindleKeep.Api.Core.Enums;
 using KindleKeep.Api.Infrastructure.Data;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace KindleKeep.Api.Infrastructure.Alerting;
 
@@ -108,11 +110,13 @@ public class AlertManager(
         var email = target.User?.Email;
         if (string.IsNullOrEmpty(email)) return;
 
+        var fromEmail = configuration["Alerting:FromEmail"] ?? "onboarding@resend.dev";
+
         var client = httpClientFactory.CreateClient("ResendClient");
         client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
 
         var payload = new ResendPayload(
-            "alerts@kindlekeep.com",
+            fromEmail,
             [email],
             $"Security Grade Regression: {target.FriendlyName}",
             $"<p>The security grade for <strong>{target.FriendlyName}</strong> has dropped to <strong>{grade}</strong>.</p>"

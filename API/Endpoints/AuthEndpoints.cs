@@ -16,30 +16,22 @@ public static class AuthEndpoints
     {
         var group = endpoints.MapGroup("/api/auth");
 
-        group.MapGet("/login", (IConfiguration configuration, HttpContext context) =>
+        group.MapGet("/login/github", (IConfiguration configuration, HttpContext context) =>
         {
             var clientId = configuration["Authentication:GitHub:ClientId"] 
                 ?? throw new InvalidOperationException("GitHub ClientId is missing.");
 
-            var request = context.Request;
-            var baseUrl = $"{request.Scheme}://{request.Host}";
-            var redirectUri = $"{baseUrl}/api/auth/callback/github";
-
-            var state = "stateless-csrf-placeholder";
-
+            var redirectUri = $"{context.Request.Scheme}://{context.Request.Host}/api/auth/callback/github";
             var queryParams = new Dictionary<string, string?>
             {
                 { "client_id", clientId },
                 { "redirect_uri", redirectUri },
                 { "scope", "read:user user:email" },
-                { "state", state }
+                { "state", "stateless-csrf-placeholder" }
             };
 
-            var authorizationUrl = QueryHelpers.AddQueryString("https://github.com/login/oauth/authorize", queryParams);
-
-            return TypedResults.Redirect(authorizationUrl);
-        })
-        .WithName("GitHubLogin");
+            return TypedResults.Redirect(QueryHelpers.AddQueryString("https://github.com/login/oauth/authorize", queryParams));
+        });
 
         group.MapGet("/callback/github", async (
             [FromQuery] string code,
@@ -50,77 +42,192 @@ public static class AuthEndpoints
             TokenService tokenService,
             HttpContext context) =>
         {
-            var clientId = configuration["Authentication:GitHub:ClientId"] 
-                ?? throw new InvalidOperationException("GitHub ClientId is missing.");
-            var clientSecret = configuration["Authentication:GitHub:ClientSecret"] 
-                ?? throw new InvalidOperationException("GitHub ClientSecret is missing.");
+            return await ProcessOAuthCallbackAsync(
+                code, AuthProvider.GitHub, "Authentication:GitHub",
+                "https://github.com/login/oauth/access_token", "https://api.github.com/user",
+                configuration, httpClientFactory, dbContext, tokenService, context);
+        });
 
-            var request = context.Request;
-            var baseUrl = $"{request.Scheme}://{request.Host}";
-            var redirectUri = $"{baseUrl}/api/auth/callback/github";
+        group.MapGet("/login/google", (IConfiguration configuration, HttpContext context) =>
+        {
+            var clientId = configuration["Authentication:Google:ClientId"] 
+                ?? throw new InvalidOperationException("Google ClientId is missing.");
 
-            var client = httpClientFactory.CreateClient("GitHub");
-
-            var tokenPayload = new Dictionary<string, string>
+            var redirectUri = $"{context.Request.Scheme}://{context.Request.Host}/api/auth/callback/google";
+            var queryParams = new Dictionary<string, string?>
             {
                 { "client_id", clientId },
-                { "client_secret", clientSecret },
-                { "code", code },
-                { "redirect_uri", redirectUri }
+                { "redirect_uri", redirectUri },
+                { "response_type", "code" },
+                { "scope", "openid email profile" },
+                { "state", "stateless-csrf-placeholder" }
             };
 
-            var tokenResponseMsg = await client.PostAsync("https://github.com/login/oauth/access_token", new FormUrlEncodedContent(tokenPayload));
-            tokenResponseMsg.EnsureSuccessStatusCode();
+            return TypedResults.Redirect(QueryHelpers.AddQueryString("https://accounts.google.com/o/oauth2/v2/auth", queryParams));
+        });
 
-            // Native AOT optimization: pass the generated JSON context
-            var tokenResult = await tokenResponseMsg.Content.ReadFromJsonAsync(AppJsonSerializerContext.Default.GithubTokenResponse);
-            if (tokenResult == null || string.IsNullOrEmpty(tokenResult.AccessToken))
+        group.MapGet("/callback/google", async (
+            [FromQuery] string code,
+            [FromQuery] string state,
+            IConfiguration configuration,
+            IHttpClientFactory httpClientFactory,
+            KindleDbContext dbContext,
+            TokenService tokenService,
+            HttpContext context) =>
+        {
+            return await ProcessOAuthCallbackAsync(
+                code, AuthProvider.Google, "Authentication:Google",
+                "https://oauth2.googleapis.com/token", "https://www.googleapis.com/oauth2/v2/userinfo",
+                configuration, httpClientFactory, dbContext, tokenService, context);
+        });
+
+        group.MapGet("/login/gitlab", (IConfiguration configuration, HttpContext context) =>
+        {
+            var clientId = configuration["Authentication:GitLab:ClientId"] 
+                ?? throw new InvalidOperationException("GitLab ClientId is missing.");
+
+            var redirectUri = $"{context.Request.Scheme}://{context.Request.Host}/api/auth/callback/gitlab";
+            var queryParams = new Dictionary<string, string?>
             {
-                return Results.BadRequest("Failed to retrieve access token.");
-            }
+                { "client_id", clientId },
+                { "redirect_uri", redirectUri },
+                { "response_type", "code" },
+                { "scope", "read_user" },
+                { "state", "stateless-csrf-placeholder" }
+            };
 
-            var userRequest = new HttpRequestMessage(HttpMethod.Get, "https://api.github.com/user");
-            userRequest.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", tokenResult.AccessToken);
-            
-            var userResponseMsg = await client.SendAsync(userRequest);
-            userResponseMsg.EnsureSuccessStatusCode();
+            return TypedResults.Redirect(QueryHelpers.AddQueryString("https://gitlab.com/oauth/authorize", queryParams));
+        });
 
-            var githubUser = await userResponseMsg.Content.ReadFromJsonAsync(AppJsonSerializerContext.Default.GithubUserResponse);
-            if (githubUser == null)
-            {
-                return Results.BadRequest("Failed to retrieve user profile.");
-            }
-
-            var externalId = githubUser.Id.ToString();
-            var user = await dbContext.Users.FirstOrDefaultAsync(u => u.ExternalId == externalId);
-
-            if (user == null)
-            {
-                user = new User
-                {
-                    ExternalId = externalId,
-                    AuthProvider = AuthProvider.GitHub,
-                    Email = githubUser.Email ?? $"{githubUser.Login}@users.noreply.github.com",
-                    DisplayName = githubUser.Name ?? githubUser.Login,
-                    AvatarUrl = githubUser.AvatarUrl
-                };
-                dbContext.Users.Add(user);
-            }
-            else
-            {
-                user.DisplayName = githubUser.Name ?? githubUser.Login;
-                user.AvatarUrl = githubUser.AvatarUrl;
-            }
-
-            await dbContext.SaveChangesAsync();
-
-            var jwtToken = tokenService.GenerateToken(user);
-            var authResponse = new AuthResponse(jwtToken, user.DisplayName, user.AvatarUrl);
-
-            return Results.Ok(authResponse);
-        })
-        .WithName("GitHubCallback");
+        group.MapGet("/callback/gitlab", async (
+            [FromQuery] string code,
+            [FromQuery] string state,
+            IConfiguration configuration,
+            IHttpClientFactory httpClientFactory,
+            KindleDbContext dbContext,
+            TokenService tokenService,
+            HttpContext context) =>
+        {
+            return await ProcessOAuthCallbackAsync(
+                code, AuthProvider.GitLab, "Authentication:GitLab",
+                "https://gitlab.com/oauth/token", "https://gitlab.com/api/v4/user",
+                configuration, httpClientFactory, dbContext, tokenService, context);
+        });
 
         return endpoints;
+    }
+
+    // Complex logic: Standardizes the OAuth token exchange and extracts normalized profile data dynamically based on the AuthProvider.
+    private static async Task<IResult> ProcessOAuthCallbackAsync(
+        string code,
+        AuthProvider provider,
+        string configSection,
+        string tokenUrl,
+        string userUrl,
+        IConfiguration configuration,
+        IHttpClientFactory httpClientFactory,
+        KindleDbContext dbContext,
+        TokenService tokenService,
+        HttpContext context)
+    {
+        var clientId = configuration[$"{configSection}:ClientId"] 
+            ?? throw new InvalidOperationException($"{provider} ClientId is missing.");
+        var clientSecret = configuration[$"{configSection}:ClientSecret"] 
+            ?? throw new InvalidOperationException($"{provider} ClientSecret is missing.");
+
+        var redirectUri = $"{context.Request.Scheme}://{context.Request.Host}/api/auth/callback/{provider.ToString().ToLower()}";
+        var client = httpClientFactory.CreateClient(provider.ToString());
+
+        var tokenPayload = new Dictionary<string, string>
+        {
+            { "client_id", clientId },
+            { "client_secret", clientSecret },
+            { "code", code },
+            { "redirect_uri", redirectUri },
+            { "grant_type", "authorization_code" }
+        };
+
+        var tokenResponseMsg = await client.PostAsync(tokenUrl, new FormUrlEncodedContent(tokenPayload));
+        tokenResponseMsg.EnsureSuccessStatusCode();
+
+        string accessToken;
+        if (provider == AuthProvider.GitHub)
+        {
+            var result = await tokenResponseMsg.Content.ReadFromJsonAsync(AppJsonSerializerContext.Default.GithubTokenResponse);
+            accessToken = result?.AccessToken ?? throw new InvalidOperationException("Failed to retrieve GitHub access token.");
+        }
+        else if (provider == AuthProvider.Google)
+        {
+            var result = await tokenResponseMsg.Content.ReadFromJsonAsync(AppJsonSerializerContext.Default.GoogleTokenResponse);
+            accessToken = result?.AccessToken ?? throw new InvalidOperationException("Failed to retrieve Google access token.");
+        }
+        else
+        {
+            var result = await tokenResponseMsg.Content.ReadFromJsonAsync(AppJsonSerializerContext.Default.GitlabTokenResponse);
+            accessToken = result?.AccessToken ?? throw new InvalidOperationException("Failed to retrieve GitLab access token.");
+        }
+
+        var userRequest = new HttpRequestMessage(HttpMethod.Get, userUrl);
+        userRequest.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", accessToken);
+        
+        var userResponseMsg = await client.SendAsync(userRequest);
+        userResponseMsg.EnsureSuccessStatusCode();
+
+        string externalId, email, displayName, avatarUrl;
+
+        if (provider == AuthProvider.GitHub)
+        {
+            var profile = await userResponseMsg.Content.ReadFromJsonAsync(AppJsonSerializerContext.Default.GithubUserResponse)
+                ?? throw new InvalidOperationException("Failed to retrieve GitHub user profile.");
+            externalId = profile.Id.ToString();
+            email = profile.Email ?? $"{profile.Login}@users.noreply.github.com";
+            displayName = profile.Name ?? profile.Login;
+            avatarUrl = profile.AvatarUrl;
+        }
+        else if (provider == AuthProvider.Google)
+        {
+            var profile = await userResponseMsg.Content.ReadFromJsonAsync(AppJsonSerializerContext.Default.GoogleUserResponse)
+                ?? throw new InvalidOperationException("Failed to retrieve Google user profile.");
+            externalId = profile.Id;
+            email = profile.Email ?? $"google_{profile.Id}@users.noreply.google.com";
+            displayName = profile.Name ?? "Google User";
+            avatarUrl = profile.AvatarUrl;
+        }
+        else
+        {
+            var profile = await userResponseMsg.Content.ReadFromJsonAsync(AppJsonSerializerContext.Default.GitlabUserResponse)
+                ?? throw new InvalidOperationException("Failed to retrieve GitLab user profile.");
+            externalId = profile.Id.ToString();
+            email = profile.Email ?? $"{profile.Username}@users.noreply.gitlab.com";
+            displayName = profile.Name ?? profile.Username;
+            avatarUrl = profile.AvatarUrl;
+        }
+
+        var user = await dbContext.Users.FirstOrDefaultAsync(u => u.ExternalId == externalId && u.AuthProvider == provider);
+
+        if (user == null)
+        {
+            user = new User
+            {
+                ExternalId = externalId,
+                AuthProvider = provider,
+                Email = email,
+                DisplayName = displayName,
+                AvatarUrl = avatarUrl
+            };
+            dbContext.Users.Add(user);
+        }
+        else
+        {
+            user.DisplayName = displayName;
+            user.AvatarUrl = avatarUrl;
+        }
+
+        await dbContext.SaveChangesAsync();
+
+        var jwtToken = tokenService.GenerateToken(user);
+        var authResponse = new AuthResponse(jwtToken, user.DisplayName, user.AvatarUrl);
+
+        return Results.Ok(authResponse);
     }
 }

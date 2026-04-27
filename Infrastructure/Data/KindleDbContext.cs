@@ -13,62 +13,9 @@ public class KindleDbContext(DbContextOptions<KindleDbContext> options) : DbCont
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
+        // Complex logic: Relies entirely on the pre-compiled Native AOT models.
+        // Extraneous configuration here will trigger runtime reflection and model discovery, 
+        // which causes the binary to crash.
         base.OnModelCreating(modelBuilder);
-
-        modelBuilder.Entity<User>(entity =>
-        {
-            entity.HasKey(e => e.Id);
-            entity.HasIndex(e => e.ExternalId).IsUnique();
-        });
-
-        modelBuilder.Entity<MonitorTarget>(entity =>
-        {
-            entity.HasKey(e => e.Id);
-
-            entity.Property(e => e.RequestHeaders)
-                .HasColumnType("jsonb");
-
-            entity.HasOne(e => e.User)
-                .WithMany(u => u.Monitors)
-                .HasForeignKey(e => e.UserId)
-                .OnDelete(DeleteBehavior.Cascade);
-        });
-
-        modelBuilder.Entity<UptimeLog>(entity =>
-        {
-            entity.HasKey(e => e.Id);
-            entity.HasIndex(e => e.Timestamp);
-
-            entity.HasOne(e => e.Monitor)
-                .WithMany()
-                .HasForeignKey(e => e.MonitorId)
-                .OnDelete(DeleteBehavior.Cascade);
-        });
-
-        modelBuilder.Entity<SecurityAudit>(entity =>
-        {
-            entity.HasKey(e => e.Id);
-            
-            entity.Property(e => e.RawHeaders)
-                .HasColumnType("jsonb");
-
-            entity.HasOne(e => e.Monitor)
-                .WithMany()
-                .HasForeignKey(e => e.MonitorId)
-                .OnDelete(DeleteBehavior.Cascade);
-        });
-
-        modelBuilder.Entity<AlertIncident>(entity =>
-        {
-            entity.HasKey(e => e.Id);
-            
-            // Indexing optimizes database lookup speeds for historical audits
-            entity.HasIndex(e => e.IncidentHash);
-
-            entity.HasOne(e => e.Monitor)
-                .WithMany()
-                .HasForeignKey(e => e.MonitorId)
-                .OnDelete(DeleteBehavior.Cascade);
-        });
     }
 }

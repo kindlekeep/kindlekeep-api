@@ -8,6 +8,7 @@
     <InvariantGlobalization>true</InvariantGlobalization>
     <PublishAot>true</PublishAot>
     <UserSecretsId>4e310e24-9817-4d7a-9993-a073f226fb76</UserSecretsId>
+    <InterceptorsNamespaces>KindleKeep.Api.Infrastructure.Data.CompiledModels</InterceptorsNamespaces>
   </PropertyGroup>
 
   <ItemGroup>

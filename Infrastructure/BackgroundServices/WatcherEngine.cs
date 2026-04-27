@@ -4,9 +4,11 @@ using KindleKeep.Api.API.Hubs;
 using KindleKeep.Api.Core.DTOs;
 using KindleKeep.Api.Core.Entities;
 using KindleKeep.Api.Core.Enums;
+using KindleKeep.Api.Infrastructure.Alerting;
 using KindleKeep.Api.Infrastructure.Data;
 using Microsoft.AspNetCore.SignalR;
 using Microsoft.EntityFrameworkCore;
+using Npgsql;
 
 namespace KindleKeep.Api.Infrastructure.BackgroundServices;
 
@@ -14,17 +16,29 @@ public class WatcherEngine(
     IServiceScopeFactory scopeFactory,
     IHttpClientFactory httpClientFactory,
     IHubContext<PulseHub> hubContext,
-    IConfiguration configuration) : BackgroundService
+    IConfiguration configuration,
+    AlertManager alertManager) : BackgroundService
 {
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         var intervalMinutes = configuration.GetValue<int>("Watcher:IntervalMinutes", 1);
         var delay = TimeSpan.FromMinutes(intervalMinutes);
 
-        while (!stoppingToken.IsCancellationRequested)
+        try
         {
-            await ProcessTargetsAsync(stoppingToken);
-            await Task.Delay(delay, stoppingToken);
+            while (!stoppingToken.IsCancellationRequested)
+            {
+                await ProcessTargetsAsync(stoppingToken);
+                await Task.Delay(delay, stoppingToken);
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            // Graceful shutdown
+        }
+        catch (ObjectDisposedException)
+        {
+            // Scope disposed during execution
         }
     }
 
@@ -32,60 +46,89 @@ public class WatcherEngine(
     {
         using var scope = scopeFactory.CreateScope();
         var dbContext = scope.ServiceProvider.GetRequiredService<KindleDbContext>();
+        var dataSource = scope.ServiceProvider.GetRequiredService<NpgsqlDataSource>();
 
-        var activeTargets = await dbContext.MonitorTargets
-            .Where(t => t.IsActive)
-            .ToListAsync(stoppingToken);
+        var activeTargets = new List<MonitorTarget>();
+
+        await using var connection = await dataSource.OpenConnectionAsync(stoppingToken);
+        await using var command = connection.CreateCommand();
+        command.CommandText = "SELECT \"Id\", \"Url\", \"FriendlyName\", \"CurrentUptimeStatus\", \"CurrentSecurityGrade\", \"IsActive\", \"UserId\" FROM \"MonitorTargets\" WHERE \"IsActive\" = true";
+        
+        await using var reader = await command.ExecuteReaderAsync(stoppingToken);
+        while (await reader.ReadAsync(stoppingToken))
+        {
+            // Complex logic: Manual instantiation strictly fulfills the required modifier contract 
+            // ensuring CS9035 compiler validation passes during Native AOT publishing.
+            activeTargets.Add(new MonitorTarget
+            {
+                Id = reader.GetGuid(0),
+                Url = reader.GetString(1),
+                FriendlyName = reader.GetString(2),
+                CurrentUptimeStatus = (UptimeStatus)reader.GetInt32(3),
+                CurrentSecurityGrade = reader.GetString(4)[0],
+                IsActive = reader.GetBoolean(5),
+                UserId = reader.GetGuid(6)
+            });
+        }
 
         var client = httpClientFactory.CreateClient("WatcherClient");
 
         foreach (var target in activeTargets)
         {
-            var stopwatch = Stopwatch.StartNew();
-            var status = UptimeStatus.Healthy;
+            var stopwatch = new Stopwatch();
+            var status = UptimeStatus.Down;
             string? errorMessage = null;
             int? statusCode = null;
             long ttfb = 0;
             Dictionary<string, string> headersDict = [];
 
-            try
+            for (int attempt = 1; attempt <= 3; attempt++)
             {
-                using var request = new HttpRequestMessage(HttpMethod.Get, target.Url);
-
-                // Complex logic: Halts the automatic body download to protect RAM allocation.
-                using var response = await client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, stoppingToken);
-
-                stopwatch.Stop();
-                ttfb = stopwatch.ElapsedMilliseconds;
-                statusCode = (int)response.StatusCode;
-
-                if (!response.IsSuccessStatusCode)
+                stopwatch.Restart();
+                try
                 {
-                    status = UptimeStatus.Down;
+                    using var request = new HttpRequestMessage(HttpMethod.Get, target.Url);
+                    using var response = await client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, stoppingToken);
+
+                    stopwatch.Stop();
+                    ttfb = stopwatch.ElapsedMilliseconds;
+                    statusCode = (int)response.StatusCode;
+
+                    if (response.IsSuccessStatusCode)
+                    {
+                        status = UptimeStatus.Healthy;
+                        errorMessage = null;
+
+                        headersDict.Clear();
+                        foreach (var header in response.Headers)
+                        {
+                            headersDict.TryAdd(header.Key, string.Join(", ", header.Value));
+                        }
+
+                        await using var stream = await response.Content.ReadAsStreamAsync(stoppingToken);
+                        var buffer = new byte[8192];
+                        _ = await stream.ReadAsync(buffer, stoppingToken);
+
+                        break;
+                    }
+
+                    errorMessage = $"HTTP {(int)response.StatusCode}";
+                }
+                catch (Exception ex)
+                {
+                    stopwatch.Stop();
+                    ttfb = stopwatch.ElapsedMilliseconds;
+                    errorMessage = ex.Message;
                 }
 
-                foreach (var header in response.Headers)
+                if (attempt < 3 && status != UptimeStatus.Healthy)
                 {
-                    headersDict.TryAdd(header.Key, string.Join(", ", header.Value));
+                    await Task.Delay(TimeSpan.FromSeconds(2), stoppingToken);
                 }
-
-                // Complex logic: Reads only the first 8KB of the response stream to prevent resource exhaustion.
-                await using var stream = await response.Content.ReadAsStreamAsync(stoppingToken);
-                var buffer = new byte[8192];
-                _ = await stream.ReadAsync(buffer, stoppingToken);
-            }
-            catch (Exception ex)
-            {
-                stopwatch.Stop();
-                ttfb = stopwatch.ElapsedMilliseconds;
-                status = UptimeStatus.Down;
-                errorMessage = ex.Message;
             }
 
             var latency = (int)ttfb;
 
-            // Complex logic: Standard HttpClient does not natively expose TCP/TLS handshake metrics without external diagnostic listeners. 
-            // Baseline variables are used to satisfy the DTA mathematical model.
             long tcpHandshake = 50;
             long tlsNegotiation = 50;
             long initLag = ttfb - (tcpHandshake + tlsNegotiation);
@@ -119,11 +162,25 @@ public class WatcherEngine(
 
                 dbContext.SecurityAudits.Add(securityAudit);
 
+                if (target.CurrentSecurityGrade != 'U' && securityGrade > target.CurrentSecurityGrade)
+                {
+                    await alertManager.ProcessSecurityAlertAsync(target, securityGrade, stoppingToken);
+                }
+
                 target.CurrentSecurityGrade = securityGrade;
             }
 
+            bool uptimeStateChanged = target.CurrentUptimeStatus != status;
+
             target.CurrentUptimeStatus = status;
             target.UpdatedAt = DateTime.UtcNow;
+
+            dbContext.MonitorTargets.Update(target);
+
+            if (uptimeStateChanged)
+            {
+                await alertManager.ProcessUptimeAlertAsync(target, status, stoppingToken);
+            }
 
             var update = new PulseUpdate(target.Id, status, latency);
             await hubContext.Clients.Group(target.UserId.ToString()).SendAsync("ReceivePulse", update, stoppingToken);
