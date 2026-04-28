@@ -1,3 +1,4 @@
+// API/Infrastructure/BackgroundServices/WatcherEngine.cs
 using System.Diagnostics;
 using System.Text.Json;
 using KindleKeep.Api.API.Hubs;
@@ -33,11 +34,9 @@ public class WatcherEngine(
         }
         catch (OperationCanceledException)
         {
-            // Graceful shutdown
         }
         catch (ObjectDisposedException)
         {
-            // Scope disposed during execution
         }
     }
 
@@ -46,19 +45,22 @@ public class WatcherEngine(
         using var scope = scopeFactory.CreateScope();
         var dataSource = scope.ServiceProvider.GetRequiredService<NpgsqlDataSource>();
 
-        var activeTargets = new List<MonitorTarget>();
+        var activeTargets = new List<(MonitorTarget Target, string? WebhookUrl)>();
 
-        // Complex logic: Initial data fetch using raw ADO.NET. 
-        // We open and close this connection quickly to avoid holding it during the slow HTTP requests.
         await using (var connection = await dataSource.OpenConnectionAsync(stoppingToken))
         {
             await using var command = connection.CreateCommand();
-            command.CommandText = "SELECT \"Id\", \"Url\", \"FriendlyName\", \"CurrentUptimeStatus\", \"CurrentSecurityGrade\", \"IsActive\", \"UserId\" FROM \"MonitorTargets\" WHERE \"IsActive\" = true";
+            command.CommandText = @"
+                SELECT mt.""Id"", mt.""Url"", mt.""FriendlyName"", mt.""CurrentUptimeStatus"", 
+                       mt.""CurrentSecurityGrade"", mt.""IsActive"", mt.""UserId"", u.""DiscordWebhookUrl"" 
+                FROM ""MonitorTargets"" mt
+                INNER JOIN ""Users"" u ON mt.""UserId"" = u.""Id""
+                WHERE mt.""IsActive"" = true";
             
             await using var reader = await command.ExecuteReaderAsync(stoppingToken);
             while (await reader.ReadAsync(stoppingToken))
             {
-                activeTargets.Add(new MonitorTarget
+                var target = new MonitorTarget
                 {
                     Id = reader.GetGuid(0),
                     Url = reader.GetString(1),
@@ -67,13 +69,16 @@ public class WatcherEngine(
                     CurrentSecurityGrade = reader.GetString(4)[0],
                     IsActive = reader.GetBoolean(5),
                     UserId = reader.GetGuid(6)
-                });
+                };
+                
+                var webhookUrl = reader.IsDBNull(7) ? null : reader.GetString(7);
+                activeTargets.Add((target, webhookUrl));
             }
         }
 
         var client = httpClientFactory.CreateClient("WatcherClient");
 
-        foreach (var target in activeTargets)
+        foreach (var (target, webhookUrl) in activeTargets)
         {
             var stopwatch = new Stopwatch();
             var status = UptimeStatus.Down;
@@ -136,12 +141,8 @@ public class WatcherEngine(
             
             char securityGrade = target.CurrentSecurityGrade;
 
-            // Complex logic: Open a new connection scoped specifically to this target's database mutations.
-            // This prevents long-running transactions and ensures connection pooling remains efficient.
             await using (var targetConnection = await dataSource.OpenConnectionAsync(stoppingToken))
             {
-                // 1. Insert UptimeLog
-                // Note: "Id" is omitted as it is a database-generated bigint identity column.
                 await using var logCommand = targetConnection.CreateCommand();
                 logCommand.CommandText = @"
                     INSERT INTO ""UptimeLogs"" (""MonitorId"", ""StatusCode"", ""LatencyMs"", ""IsColdStart"", ""ErrorMessage"", ""Timestamp"")
@@ -156,13 +157,11 @@ public class WatcherEngine(
                 
                 await logCommand.ExecuteNonQueryAsync(stoppingToken);
 
-                // 2. Insert SecurityAudit (If Healthy)
                 if (status == UptimeStatus.Healthy)
                 {
                     securityGrade = CalculateSecurityGrade(headersDict);
                     var rawHeadersJson = JsonSerializer.Serialize(headersDict, AppJsonSerializerContext.Default.DictionaryStringString);
 
-                    // Note: "Id" is explicitly provided here as it is a uuid primary key.
                     await using var auditCommand = targetConnection.CreateCommand();
                     auditCommand.CommandText = @"
                         INSERT INTO ""SecurityAudits"" (""Id"", ""MonitorId"", ""HasCsp"", ""HasHsts"", ""HasXfo"", ""HasNosniff"", ""RawHeaders"", ""CreatedAt"")
@@ -181,11 +180,10 @@ public class WatcherEngine(
 
                     if (target.CurrentSecurityGrade != 'U' && securityGrade > target.CurrentSecurityGrade)
                     {
-                        await alertManager.ProcessSecurityAlertAsync(target, securityGrade, stoppingToken);
+                        await alertManager.ProcessSecurityAlertAsync(target, securityGrade, webhookUrl, stoppingToken);
                     }
                 }
 
-                // 3. Update MonitorTarget
                 await using var updateCommand = targetConnection.CreateCommand();
                 updateCommand.CommandText = @"
                     UPDATE ""MonitorTargets""
@@ -204,14 +202,13 @@ public class WatcherEngine(
 
             bool uptimeStateChanged = target.CurrentUptimeStatus != status;
             
-            // Sync memory state for the alert processing logic
             target.CurrentUptimeStatus = status;
             target.CurrentSecurityGrade = securityGrade;
             target.UpdatedAt = DateTime.UtcNow;
 
             if (uptimeStateChanged)
             {
-                await alertManager.ProcessUptimeAlertAsync(target, status, stoppingToken);
+                await alertManager.ProcessUptimeAlertAsync(target, status, webhookUrl, stoppingToken);
             }
 
             var update = new PulseUpdate(target.Id, status, latency);

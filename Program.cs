@@ -1,6 +1,8 @@
+// Program.cs
 using KindleKeep.Api.API.Endpoints;
 using KindleKeep.Api.API.Hubs;
 using KindleKeep.Api.Core.Entities;
+using KindleKeep.Api.Core.DTOs;
 using KindleKeep.Api.Infrastructure.Data;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.EntityFrameworkCore;
@@ -11,7 +13,7 @@ using System.Text.Json.Serialization;
 
 var builder = WebApplication.CreateSlimBuilder(args);
 
-var listeningUrl = builder.Configuration["WebHost:Url"] ?? "http://localhost:5247";
+var listeningUrl = builder.Configuration["WebHost:Url"] ?? Environment.GetEnvironmentVariable("KK_WEBHOST_URL") ?? "http://localhost:5247";
 builder.WebHost.UseUrls(listeningUrl);
 
 builder.Services.AddHttpClient("GitHub", client =>
@@ -47,16 +49,18 @@ builder.Services.AddCors(options =>
 {
     options.AddPolicy("FrontendPolicy", policy =>
     {
-        var origins = builder.Configuration["AllowedOrigins"]?.Split(',') ?? [];
+        var origins = builder.Configuration["AllowedOrigins"]?.Split(',') ?? Environment.GetEnvironmentVariable("KK_ALLOWED_ORIGINS")?.Split(',') ?? [];
         
         policy.WithOrigins(origins)
               .AllowAnyMethod()
               .AllowAnyHeader()
+              .WithHeaders("Authorization")
               .AllowCredentials();
     });
 });
 
 var connectionString = builder.Configuration.GetConnectionString("DefaultConnection") 
+    ?? Environment.GetEnvironmentVariable("KK_DATABASE_URL") 
     ?? throw new InvalidOperationException("Database connection string is missing.");
 
 var dataSourceBuilder = new NpgsqlDataSourceBuilder(connectionString);
@@ -86,6 +90,7 @@ builder.Services.AddExceptionHandler<KindleKeep.Api.Infrastructure.Exceptions.Gl
 builder.Services.AddProblemDetails();
 
 var jwtKey = builder.Configuration["Jwt:Key"] 
+    ?? Environment.GetEnvironmentVariable("KK_JWT_KEY") 
     ?? throw new InvalidOperationException("JWT Secret Key is missing.");
 
 builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
@@ -140,6 +145,9 @@ app.UseCors("FrontendPolicy");
 app.UseAuthentication();
 app.UseAuthorization();
 
+// Task 15: Public Stay-Awake endpoint to bypass Render's sleep cycle
+app.MapGet("/api/stay-awake", () => TypedResults.Ok(new { status = "awake", timestamp = DateTime.UtcNow })).WithName("StayAwake");
+
 app.MapGet("/health", () => TypedResults.Ok("Healthy")).WithName("GetHealthStatus");
 
 app.MapAuthEndpoints();
@@ -154,23 +162,30 @@ app.Run();
 [JsonSerializable(typeof(UptimeLog))]
 [JsonSerializable(typeof(SecurityAudit))]
 [JsonSerializable(typeof(AlertIncident))]
-[JsonSerializable(typeof(KindleKeep.Api.Core.DTOs.GithubTokenResponse))]
-[JsonSerializable(typeof(KindleKeep.Api.Core.DTOs.GithubUserResponse))]
-[JsonSerializable(typeof(KindleKeep.Api.Core.DTOs.GoogleTokenResponse))]
-[JsonSerializable(typeof(KindleKeep.Api.Core.DTOs.GoogleUserResponse))]
-[JsonSerializable(typeof(KindleKeep.Api.Core.DTOs.GitlabTokenResponse))]
-[JsonSerializable(typeof(KindleKeep.Api.Core.DTOs.GitlabUserResponse))]
-[JsonSerializable(typeof(KindleKeep.Api.Core.DTOs.AuthResponse))]
-[JsonSerializable(typeof(KindleKeep.Api.Core.DTOs.PulseUpdate))]
+[JsonSerializable(typeof(GithubTokenResponse))]
+[JsonSerializable(typeof(GithubUserResponse))]
+[JsonSerializable(typeof(GoogleTokenResponse))]
+[JsonSerializable(typeof(GoogleUserResponse))]
+[JsonSerializable(typeof(GitlabTokenResponse))]
+[JsonSerializable(typeof(GitlabUserResponse))]
+[JsonSerializable(typeof(AuthResponse))]
+[JsonSerializable(typeof(PulseUpdate))]
 [JsonSerializable(typeof(Dictionary<string, string>))]
 [JsonSerializable(typeof(KindleKeep.Api.Infrastructure.Alerting.DiscordPayload))]
 [JsonSerializable(typeof(KindleKeep.Api.Infrastructure.Alerting.ResendPayload))]
 [JsonSerializable(typeof(Microsoft.AspNetCore.Mvc.ProblemDetails))]
-[JsonSerializable(typeof(KindleKeep.Api.Core.DTOs.UserProfileResponse))]
-[JsonSerializable(typeof(KindleKeep.Api.Core.DTOs.CreateMonitorRequest))]
-[JsonSerializable(typeof(KindleKeep.Api.Core.DTOs.MonitorResponse))]
-[JsonSerializable(typeof(System.Collections.Generic.List<KindleKeep.Api.Core.DTOs.MonitorResponse>))]
+[JsonSerializable(typeof(UserProfileResponse))]
+[JsonSerializable(typeof(CreateMonitorRequest))]
+[JsonSerializable(typeof(MonitorResponse))]
+[JsonSerializable(typeof(System.Collections.Generic.List<MonitorResponse>))]
 [JsonSerializable(typeof(string))]
+[JsonSerializable(typeof(KindleKeep.Api.Core.DTOs.SecurityAuditResponse))]
+[JsonSerializable(typeof(KindleKeep.Api.Core.DTOs.UserUsageResponse))]
+[JsonSerializable(typeof(KindleKeep.Api.Core.DTOs.UpdateSettingsRequest))]
+[JsonSerializable(typeof(KindleKeep.Api.Core.DTOs.UptimeLogResponse))]
+[JsonSerializable(typeof(System.Collections.Generic.IEnumerable<KindleKeep.Api.Core.DTOs.UptimeLogResponse>))]
+[JsonSerializable(typeof(KindleKeep.Api.Core.DTOs.UserSettingsResponse))]
+[JsonSerializable(typeof(object))]
 internal partial class AppJsonSerializerContext : JsonSerializerContext
 {
 }

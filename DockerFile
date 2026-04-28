@@ -1,0 +1,43 @@
+# Dockerfile
+# Stage 1: Build
+FROM mcr.microsoft.com/dotnet/sdk:10.0-alpine AS build
+WORKDIR /src
+
+# Install Native AOT build prerequisites for Alpine
+RUN apk update && apk add --no-cache \
+    clang \
+    build-base \
+    zlib-dev
+
+# Copy project file and restore dependencies
+COPY kindlekeep-api.csproj .
+RUN dotnet restore "kindlekeep-api.csproj"
+
+# Copy the rest of the source code
+COPY . .
+
+# Publish the application as Native AOT
+# This trims the framework and compiles directly to native machine code
+RUN dotnet publish "kindlekeep-api.csproj" \
+    -c Release \
+    -r linux-musl-x64 \
+    -o /app/publish \
+    --no-restore
+
+# Stage 2: Runtime
+# Using the minimal runtime-deps image
+FROM mcr.microsoft.com/dotnet/runtime-deps:10.0-alpine AS final
+WORKDIR /app
+
+# Expose the standard port for the application
+EXPOSE 8080
+
+# Configure environment variables
+ENV ASPNETCORE_URLS=http://+:8080
+ENV DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=1
+
+# Copy the compiled native executable from the build stage
+COPY --from=build /app/publish .
+
+# Run the native binary
+ENTRYPOINT ["./kindlekeep-api"]

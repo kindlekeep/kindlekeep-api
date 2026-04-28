@@ -21,7 +21,7 @@ public class AlertManager(
 {
     private readonly ConcurrentDictionary<string, DateTime> _activeIncidents = new();
 
-    public async Task ProcessUptimeAlertAsync(MonitorTarget target, UptimeStatus newStatus, CancellationToken stoppingToken)
+    public async Task ProcessUptimeAlertAsync(MonitorTarget target, UptimeStatus newStatus, string? webhookUrl, CancellationToken stoppingToken)
     {
         var rawFingerprint = $"{target.Id}:Uptime:{newStatus}";
         var hash = ComputeHash(rawFingerprint);
@@ -61,10 +61,10 @@ public class AlertManager(
             await dbContext.SaveChangesAsync(stoppingToken);
         }
 
-        await DispatchDiscordAlertAsync(target, newStatus, stoppingToken);
+        await DispatchDiscordAlertAsync(target, newStatus, webhookUrl, stoppingToken);
     }
 
-    public async Task ProcessSecurityAlertAsync(MonitorTarget target, char newGrade, CancellationToken stoppingToken)
+    public async Task ProcessSecurityAlertAsync(MonitorTarget target, char newGrade, string? webhookUrl, CancellationToken stoppingToken)
     {
         var rawFingerprint = $"{target.Id}:Security:{newGrade}";
         var hash = ComputeHash(rawFingerprint);
@@ -91,15 +91,15 @@ public class AlertManager(
         await DispatchResendAlertAsync(target, newGrade, stoppingToken);
     }
 
-    private async Task DispatchDiscordAlertAsync(MonitorTarget target, UptimeStatus status, CancellationToken stoppingToken)
+    private async Task DispatchDiscordAlertAsync(MonitorTarget target, UptimeStatus status, string? webhookUrl, CancellationToken stoppingToken)
     {
-        var webhookUrl = configuration["Alerting:DiscordWebhookUrl"];
-        if (string.IsNullOrEmpty(webhookUrl)) return;
+        var targetWebhook = webhookUrl ?? configuration["Alerting:DiscordWebhookUrl"];
+        if (string.IsNullOrEmpty(targetWebhook)) return;
 
         var client = httpClientFactory.CreateClient("DiscordClient");
         var payload = new DiscordPayload($"Monitor **{target.FriendlyName}** ({target.Url}) status changed to **{status}**.");
         
-        await client.PostAsJsonAsync(webhookUrl, payload, AppJsonSerializerContext.Default.DiscordPayload, stoppingToken);
+        await client.PostAsJsonAsync(targetWebhook, payload, AppJsonSerializerContext.Default.DiscordPayload, stoppingToken);
     }
 
     private async Task DispatchResendAlertAsync(MonitorTarget target, char grade, CancellationToken stoppingToken)

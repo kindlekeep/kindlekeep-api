@@ -1,4 +1,7 @@
+using System;
+using System.Collections.Generic;
 using System.Security.Claims;
+using System.Text.Json.Serialization;
 using KindleKeep.Api.Core.DTOs;
 using KindleKeep.Api.Core.Enums;
 using Microsoft.AspNetCore.Builder;
@@ -8,131 +11,259 @@ using Microsoft.AspNetCore.Routing;
 using Npgsql;
 using NpgsqlTypes;
 
-namespace KindleKeep.Api.API.Endpoints;
-
-public static class MonitorEndpoints
+namespace KindleKeep.Api.Core.DTOs
 {
-    public static IEndpointRouteBuilder MapMonitorEndpoints(this IEndpointRouteBuilder endpoints)
+    public record UptimeLogResponse(
+        [property: JsonPropertyName("timestamp")] DateTime Timestamp,
+        [property: JsonPropertyName("status")] UptimeStatus Status,
+        [property: JsonPropertyName("latencyMs")] int LatencyMs
+    );
+}
+
+namespace KindleKeep.Api.API.Endpoints
+{
+    public static class MonitorEndpoints
     {
-        var group = endpoints.MapGroup("/api/monitors").RequireAuthorization();
-
-        group.MapGet("/", async ([FromServices] NpgsqlDataSource dataSource, HttpContext context) =>
+        public static IEndpointRouteBuilder MapMonitorEndpoints(this IEndpointRouteBuilder endpoints)
         {
-            var userIdClaim = context.User.FindFirst(ClaimTypes.NameIdentifier)?.Value 
-                ?? context.User.FindFirst("sub")?.Value;
+            var group = endpoints.MapGroup("/api/monitors").RequireAuthorization();
 
-            if (string.IsNullOrEmpty(userIdClaim) || !Guid.TryParse(userIdClaim, out var userId))
+            group.MapGet("/", async ([FromServices] NpgsqlDataSource dataSource, HttpContext context) =>
             {
-                return Results.Unauthorized();
-            }
+                var userIdClaim = context.User.FindFirst(ClaimTypes.NameIdentifier)?.Value 
+                    ?? context.User.FindFirst("sub")?.Value;
 
-            var monitors = new List<MonitorResponse>();
-            
-            await using var connection = await dataSource.OpenConnectionAsync();
-            await using var command = connection.CreateCommand();
-            command.CommandText = "SELECT \"Id\", \"Url\", \"FriendlyName\", \"CurrentUptimeStatus\", \"CurrentSecurityGrade\", \"IsActive\" FROM \"MonitorTargets\" WHERE \"UserId\" = $1";
-            command.Parameters.Add(new NpgsqlParameter { NpgsqlDbType = NpgsqlDbType.Uuid, Value = userId });
+                if (string.IsNullOrEmpty(userIdClaim) || !Guid.TryParse(userIdClaim, out var userId))
+                {
+                    return Results.Unauthorized();
+                }
 
-            await using var reader = await command.ExecuteReaderAsync();
-            while (await reader.ReadAsync())
+                var monitors = new List<MonitorResponse>();
+                
+                await using var connection = await dataSource.OpenConnectionAsync();
+                await using var command = connection.CreateCommand();
+                command.CommandText = "SELECT \"Id\", \"Url\", \"FriendlyName\", \"CurrentUptimeStatus\", \"CurrentSecurityGrade\", \"IsActive\" FROM \"MonitorTargets\" WHERE \"UserId\" = $1";
+                command.Parameters.Add(new NpgsqlParameter { NpgsqlDbType = NpgsqlDbType.Uuid, Value = userId });
+
+                await using var reader = await command.ExecuteReaderAsync();
+                while (await reader.ReadAsync())
+                {
+                    monitors.Add(new MonitorResponse(
+                        reader.GetGuid(0),
+                        reader.GetString(1),
+                        reader.GetString(2),
+                        (UptimeStatus)reader.GetInt32(3),
+                        reader.GetString(4)[0],
+                        reader.GetBoolean(5)
+                    ));
+                }
+
+                return Results.Ok(monitors);
+            });
+
+            group.MapPost("/", async (CreateMonitorRequest request, [FromServices] NpgsqlDataSource dataSource, HttpContext context) =>
             {
-                monitors.Add(new MonitorResponse(
-                    reader.GetGuid(0),
-                    reader.GetString(1),
-                    reader.GetString(2),
-                    (UptimeStatus)reader.GetInt32(3),
-                    reader.GetString(4)[0],
-                    reader.GetBoolean(5)
-                ));
-            }
+                var userIdClaim = context.User.FindFirst(ClaimTypes.NameIdentifier)?.Value 
+                    ?? context.User.FindFirst("sub")?.Value;
 
-            return Results.Ok(monitors);
-        });
+                if (string.IsNullOrEmpty(userIdClaim) || !Guid.TryParse(userIdClaim, out var userId))
+                {
+                    return Results.Unauthorized();
+                }
 
-        group.MapPost("/", async (CreateMonitorRequest request, [FromServices] NpgsqlDataSource dataSource, HttpContext context) =>
-        {
-            var userIdClaim = context.User.FindFirst(ClaimTypes.NameIdentifier)?.Value 
-                ?? context.User.FindFirst("sub")?.Value;
+                if (string.IsNullOrWhiteSpace(request.FriendlyName))
+                {
+                    return Results.BadRequest("Friendly Name cannot be empty.");
+                }
 
-            if (string.IsNullOrEmpty(userIdClaim) || !Guid.TryParse(userIdClaim, out var userId))
+                if (!Uri.TryCreate(request.Url, UriKind.Absolute, out var uriResult) || 
+                    (uriResult.Scheme != Uri.UriSchemeHttp && uriResult.Scheme != Uri.UriSchemeHttps))
+                {
+                    return Results.BadRequest("Invalid URL format. Must be an absolute HTTP or HTTPS URI.");
+                }
+
+                var monitorId = Guid.NewGuid();
+
+                await using var connection = await dataSource.OpenConnectionAsync();
+                await using var command = connection.CreateCommand();
+                
+                command.CommandText = @"
+                    INSERT INTO ""MonitorTargets"" (""Id"", ""UserId"", ""Url"", ""FriendlyName"", ""IntervalMinutes"", ""RequestTimeout"", ""IsActive"", ""CurrentUptimeStatus"", ""CurrentSecurityGrade"", ""UpdatedAt"")
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+                    RETURNING ""Id"";";
+
+                command.Parameters.Add(new NpgsqlParameter { NpgsqlDbType = NpgsqlDbType.Uuid, Value = monitorId });
+                command.Parameters.Add(new NpgsqlParameter { NpgsqlDbType = NpgsqlDbType.Uuid, Value = userId });
+                command.Parameters.Add(new NpgsqlParameter { NpgsqlDbType = NpgsqlDbType.Text, Value = request.Url });
+                command.Parameters.Add(new NpgsqlParameter { NpgsqlDbType = NpgsqlDbType.Text, Value = request.FriendlyName });
+                command.Parameters.Add(new NpgsqlParameter { NpgsqlDbType = NpgsqlDbType.Integer, Value = 10 });
+                command.Parameters.Add(new NpgsqlParameter { NpgsqlDbType = NpgsqlDbType.Integer, Value = 30 });
+                command.Parameters.Add(new NpgsqlParameter { NpgsqlDbType = NpgsqlDbType.Boolean, Value = true });
+                command.Parameters.Add(new NpgsqlParameter { NpgsqlDbType = NpgsqlDbType.Integer, Value = 0 });
+                command.Parameters.Add(new NpgsqlParameter { NpgsqlDbType = NpgsqlDbType.Text, Value = "U" });
+                command.Parameters.Add(new NpgsqlParameter { NpgsqlDbType = NpgsqlDbType.TimestampTz, Value = DateTime.UtcNow });
+
+                await command.ExecuteScalarAsync();
+
+                var response = new MonitorResponse(
+                    monitorId,
+                    request.Url,
+                    request.FriendlyName,
+                    (UptimeStatus)0,
+                    'U',
+                    true
+                );
+
+                return Results.Created($"/api/monitors/{monitorId}", response);
+            });
+
+            group.MapDelete("/{id:guid}", async (Guid id, [FromServices] NpgsqlDataSource dataSource, HttpContext context) =>
             {
-                return Results.Unauthorized();
-            }
+                var userIdClaim = context.User.FindFirst(ClaimTypes.NameIdentifier)?.Value 
+                    ?? context.User.FindFirst("sub")?.Value;
 
-            if (string.IsNullOrWhiteSpace(request.FriendlyName))
+                if (string.IsNullOrEmpty(userIdClaim) || !Guid.TryParse(userIdClaim, out var userId))
+                {
+                    return Results.Unauthorized();
+                }
+
+                await using var connection = await dataSource.OpenConnectionAsync();
+                await using var command = connection.CreateCommand();
+                command.CommandText = "DELETE FROM \"MonitorTargets\" WHERE \"Id\" = $1 AND \"UserId\" = $2";
+                
+                command.Parameters.Add(new NpgsqlParameter { NpgsqlDbType = NpgsqlDbType.Uuid, Value = id });
+                command.Parameters.Add(new NpgsqlParameter { NpgsqlDbType = NpgsqlDbType.Uuid, Value = userId });
+
+                var rowsAffected = await command.ExecuteNonQueryAsync();
+
+                if (rowsAffected == 0)
+                {
+                    return Results.NotFound();
+                }
+
+                return Results.NoContent();
+            });
+
+            group.MapGet("/{id:guid}/audit", async (Guid id, [FromServices] NpgsqlDataSource dataSource, HttpContext context) =>
             {
-                return Results.BadRequest("Friendly Name cannot be empty.");
-            }
+                var userIdClaim = context.User.FindFirst(ClaimTypes.NameIdentifier)?.Value 
+                    ?? context.User.FindFirst("sub")?.Value;
 
-            if (!Uri.TryCreate(request.Url, UriKind.Absolute, out var uriResult) || 
-                (uriResult.Scheme != Uri.UriSchemeHttp && uriResult.Scheme != Uri.UriSchemeHttps))
+                if (string.IsNullOrEmpty(userIdClaim) || !Guid.TryParse(userIdClaim, out var userId))
+                {
+                    return Results.Unauthorized();
+                }
+
+                await using var connection = await dataSource.OpenConnectionAsync();
+                await using var command = connection.CreateCommand();
+                
+                command.CommandText = @"
+                    SELECT sa.""HasCsp"", sa.""HasHsts"", sa.""HasXfo"", sa.""HasNosniff"", sa.""SslIssuer"", sa.""SslExpiryAt"", sa.""RawHeaders""
+                    FROM ""SecurityAudits"" sa
+                    INNER JOIN ""MonitorTargets"" mt ON sa.""MonitorId"" = mt.""Id""
+                    WHERE mt.""Id"" = $1 AND mt.""UserId"" = $2
+                    ORDER BY sa.""CreatedAt"" DESC
+                    LIMIT 1;";
+
+                command.Parameters.Add(new NpgsqlParameter { NpgsqlDbType = NpgsqlDbType.Uuid, Value = id });
+                command.Parameters.Add(new NpgsqlParameter { NpgsqlDbType = NpgsqlDbType.Uuid, Value = userId });
+
+                await using var reader = await command.ExecuteReaderAsync();
+
+                if (!await reader.ReadAsync())
+                {
+                    return Results.NotFound();
+                }
+
+                var response = new SecurityAuditResponse(
+                    reader.GetBoolean(0),
+                    reader.GetBoolean(1),
+                    reader.GetBoolean(2),
+                    reader.GetBoolean(3),
+                    reader.IsDBNull(4) ? null : reader.GetString(4),
+                    reader.IsDBNull(5) ? null : reader.GetDateTime(5),
+                    reader.IsDBNull(6) ? null : reader.GetString(6)
+                );
+
+                return Results.Ok(response);
+            });
+
+            group.MapPatch("/{id:guid}/toggle", async (Guid id, [FromServices] NpgsqlDataSource dataSource, HttpContext context) =>
             {
-                return Results.BadRequest("Invalid URL format. Must be an absolute HTTP or HTTPS URI.");
-            }
+                var userIdClaim = context.User.FindFirst(ClaimTypes.NameIdentifier)?.Value 
+                    ?? context.User.FindFirst("sub")?.Value;
 
-            var monitorId = Guid.NewGuid();
+                if (string.IsNullOrEmpty(userIdClaim) || !Guid.TryParse(userIdClaim, out var userId))
+                {
+                    return Results.Unauthorized();
+                }
 
-            await using var connection = await dataSource.OpenConnectionAsync();
-            await using var command = connection.CreateCommand();
-            
-            command.CommandText = @"
-                INSERT INTO ""MonitorTargets"" (""Id"", ""UserId"", ""Url"", ""FriendlyName"", ""IntervalMinutes"", ""RequestTimeout"", ""IsActive"", ""CurrentUptimeStatus"", ""CurrentSecurityGrade"", ""UpdatedAt"")
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-                RETURNING ""Id"";";
+                await using var connection = await dataSource.OpenConnectionAsync();
+                await using var command = connection.CreateCommand();
+                
+                command.CommandText = @"
+                    UPDATE ""MonitorTargets"" 
+                    SET ""IsActive"" = NOT ""IsActive"", ""UpdatedAt"" = $1 
+                    WHERE ""Id"" = $2 AND ""UserId"" = $3
+                    RETURNING ""IsActive"";";
 
-            command.Parameters.Add(new NpgsqlParameter { NpgsqlDbType = NpgsqlDbType.Uuid, Value = monitorId });
-            command.Parameters.Add(new NpgsqlParameter { NpgsqlDbType = NpgsqlDbType.Uuid, Value = userId });
-            command.Parameters.Add(new NpgsqlParameter { NpgsqlDbType = NpgsqlDbType.Text, Value = request.Url });
-            command.Parameters.Add(new NpgsqlParameter { NpgsqlDbType = NpgsqlDbType.Text, Value = request.FriendlyName });
-            command.Parameters.Add(new NpgsqlParameter { NpgsqlDbType = NpgsqlDbType.Integer, Value = 10 });
-            command.Parameters.Add(new NpgsqlParameter { NpgsqlDbType = NpgsqlDbType.Integer, Value = 30 });
-            command.Parameters.Add(new NpgsqlParameter { NpgsqlDbType = NpgsqlDbType.Boolean, Value = true });
-            command.Parameters.Add(new NpgsqlParameter { NpgsqlDbType = NpgsqlDbType.Integer, Value = 0 });
-            command.Parameters.Add(new NpgsqlParameter { NpgsqlDbType = NpgsqlDbType.Text, Value = "U" });
-            command.Parameters.Add(new NpgsqlParameter { NpgsqlDbType = NpgsqlDbType.TimestampTz, Value = DateTime.UtcNow });
+                command.Parameters.Add(new NpgsqlParameter { NpgsqlDbType = NpgsqlDbType.TimestampTz, Value = DateTime.UtcNow });
+                command.Parameters.Add(new NpgsqlParameter { NpgsqlDbType = NpgsqlDbType.Uuid, Value = id });
+                command.Parameters.Add(new NpgsqlParameter { NpgsqlDbType = NpgsqlDbType.Uuid, Value = userId });
 
-            await command.ExecuteScalarAsync();
+                var result = await command.ExecuteScalarAsync();
 
-            var response = new MonitorResponse(
-                monitorId,
-                request.Url,
-                request.FriendlyName,
-                (UptimeStatus)0,
-                'U',
-                true
-            );
+                if (result == null)
+                {
+                    return Results.NotFound();
+                }
 
-            return Results.Created($"/api/monitors/{monitorId}", response);
-        });
+                return Results.NoContent();
+            });
 
-        group.MapDelete("/{id:guid}", async (Guid id, [FromServices] NpgsqlDataSource dataSource, HttpContext context) =>
-        {
-            var userIdClaim = context.User.FindFirst(ClaimTypes.NameIdentifier)?.Value 
-                ?? context.User.FindFirst("sub")?.Value;
-
-            if (string.IsNullOrEmpty(userIdClaim) || !Guid.TryParse(userIdClaim, out var userId))
+            // Complex logic: Atomic inner join prevents fetching history for unauthorized targets. Results are reversed in memory to display chronologically left-to-right.
+            group.MapGet("/{id:guid}/history", async (Guid id, [FromServices] NpgsqlDataSource dataSource, HttpContext context) =>
             {
-                return Results.Unauthorized();
-            }
+                var userIdClaim = context.User.FindFirst(ClaimTypes.NameIdentifier)?.Value 
+                    ?? context.User.FindFirst("sub")?.Value;
 
-            // Complex logic: Combines authorization and deletion into a single atomic database operation.
-            await using var connection = await dataSource.OpenConnectionAsync();
-            await using var command = connection.CreateCommand();
-            command.CommandText = "DELETE FROM \"MonitorTargets\" WHERE \"Id\" = $1 AND \"UserId\" = $2";
-            
-            command.Parameters.Add(new NpgsqlParameter { NpgsqlDbType = NpgsqlDbType.Uuid, Value = id });
-            command.Parameters.Add(new NpgsqlParameter { NpgsqlDbType = NpgsqlDbType.Uuid, Value = userId });
+                if (string.IsNullOrEmpty(userIdClaim) || !Guid.TryParse(userIdClaim, out var userId))
+                {
+                    return Results.Unauthorized();
+                }
 
-            var rowsAffected = await command.ExecuteNonQueryAsync();
+                var logs = new List<UptimeLogResponse>();
 
-            if (rowsAffected == 0)
-            {
-                return Results.NotFound();
-            }
+                await using var connection = await dataSource.OpenConnectionAsync();
+                await using var command = connection.CreateCommand();
+                
+                command.CommandText = @"
+                    SELECT ul.""CreatedAt"", ul.""Status"", ul.""LatencyMs""
+                    FROM ""UptimeLogs"" ul
+                    INNER JOIN ""MonitorTargets"" mt ON ul.""MonitorId"" = mt.""Id""
+                    WHERE mt.""Id"" = $1 AND mt.""UserId"" = $2
+                    ORDER BY ul.""CreatedAt"" DESC
+                    LIMIT 144;";
 
-            return Results.NoContent();
-        });
+                command.Parameters.Add(new NpgsqlParameter { NpgsqlDbType = NpgsqlDbType.Uuid, Value = id });
+                command.Parameters.Add(new NpgsqlParameter { NpgsqlDbType = NpgsqlDbType.Uuid, Value = userId });
 
-        return endpoints;
+                await using var reader = await command.ExecuteReaderAsync();
+
+                while (await reader.ReadAsync())
+                {
+                    logs.Add(new UptimeLogResponse(
+                        reader.GetDateTime(0),
+                        (UptimeStatus)reader.GetInt32(1),
+                        reader.GetInt32(2)
+                    ));
+                }
+
+                logs.Reverse();
+                return Results.Ok(logs);
+            });
+
+            return endpoints;
+        }
     }
 }
