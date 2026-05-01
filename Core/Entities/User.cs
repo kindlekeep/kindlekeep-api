@@ -1,17 +1,23 @@
+using System;
+using System.Collections.Generic;
+using System.Text.Json.Serialization;
 using KindleKeep.Api.Core.Enums;
 
 namespace KindleKeep.Api.Core.Entities;
 
 public record User
 {
-    public Guid Id { get; init; } = Guid.NewGuid();
-    public required string ExternalId { get; init; }
-    public required AuthProvider AuthProvider { get; init; }
-    public required string Email { get; init; }
+    public Guid Id { get; set; }
+    public required string ExternalId { get; set; }
+    public required AuthProvider AuthProvider { get; set; }
+    public required string Email { get; set; }
     public required string DisplayName { get; set; }
-    public required string AvatarUrl { get; set; }
-    public int MonitorLimit { get; init; } = 5;
+    public string? AvatarUrl { get; set; }
+    public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
 
-    // Navigation property for Entity Framework relations
-    public ICollection<MonitorTarget> Monitors { get; init; } = [];
+    public string? DiscordWebhookUrl { get; set; }
+    public bool EnableEmailNotifications { get; set; } = true;
+
+    [JsonIgnore]
+    public ICollection<MonitorTarget> Monitors { get; set; } = new List<MonitorTarget>();
 }

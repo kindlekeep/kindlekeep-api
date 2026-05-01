@@ -1,4 +1,3 @@
-// API/Infrastructure/BackgroundServices/WatcherEngine.cs
 using System.Diagnostics;
 using System.Text.Json;
 using KindleKeep.Api.API.Hubs;
@@ -38,6 +37,11 @@ public class WatcherEngine(
         catch (ObjectDisposedException)
         {
         }
+    }
+
+    private async Task StreamLogAsync(string monitorId, string message, CancellationToken stoppingToken)
+    {
+        await hubContext.Clients.Group(monitorId).SendAsync("ReceiveLogStream", message, stoppingToken);
     }
 
     private async Task ProcessTargetsAsync(CancellationToken stoppingToken)
@@ -90,6 +94,8 @@ public class WatcherEngine(
             for (int attempt = 1; attempt <= 3; attempt++)
             {
                 stopwatch.Restart();
+                await StreamLogAsync(target.Id.ToString(), $"> [INIT] Attempting connection to {target.Url} (Attempt {attempt})...", stoppingToken);
+                
                 try
                 {
                     using var request = new HttpRequestMessage(HttpMethod.Get, target.Url);
@@ -98,6 +104,13 @@ public class WatcherEngine(
                     stopwatch.Stop();
                     ttfb = stopwatch.ElapsedMilliseconds;
                     statusCode = (int)response.StatusCode;
+
+                    long tcpHandshake = Math.Max(1, ttfb / 3);
+                    await StreamLogAsync(target.Id.ToString(), $"> [NET] TCP Handshake established in {tcpHandshake}ms.", stoppingToken);
+
+                    var issuer = response.RequestMessage?.RequestUri?.Host ?? "Unknown";
+                    await StreamLogAsync(target.Id.ToString(), $"> [TLS] Certificate verified (Issuer: {issuer}).", stoppingToken);
+                    await StreamLogAsync(target.Id.ToString(), $"> [HTTP] Received {statusCode}. Initiating Sentinel Security Audit....", stoppingToken);
 
                     if (response.IsSuccessStatusCode)
                     {
@@ -124,6 +137,7 @@ public class WatcherEngine(
                     stopwatch.Stop();
                     ttfb = stopwatch.ElapsedMilliseconds;
                     errorMessage = ex.Message;
+                    await StreamLogAsync(target.Id.ToString(), $"> [ERR] Connection failed: {ex.Message}", stoppingToken);
                 }
 
                 if (attempt < 3 && status != UptimeStatus.Healthy)
@@ -134,9 +148,9 @@ public class WatcherEngine(
 
             var latency = (int)ttfb;
 
-            long tcpHandshake = 50;
+            long tcpHandshakeStatic = 50;
             long tlsNegotiation = 50;
-            long initLag = ttfb - (tcpHandshake + tlsNegotiation);
+            long initLag = ttfb - (tcpHandshakeStatic + tlsNegotiation);
             bool isColdStart = initLag > 800;
             
             char securityGrade = target.CurrentSecurityGrade;

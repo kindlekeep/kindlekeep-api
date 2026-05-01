@@ -1,41 +1,52 @@
+using System;
+using System.Collections.Generic;
+using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
 using System.Text;
-using KindleKeep.Api.Core.Entities;
-using Microsoft.IdentityModel.JsonWebTokens;
+using Microsoft.Extensions.Configuration;
 using Microsoft.IdentityModel.Tokens;
+using KindleKeep.Api.Core.Entities;
 
 namespace KindleKeep.Api.Infrastructure.Identity;
 
-public class TokenService(IConfiguration configuration)
+public class TokenService
 {
+    private readonly IConfiguration _configuration;
+
+    public TokenService(IConfiguration configuration)
+    {
+        _configuration = configuration;
+    }
+
     public string GenerateToken(User user)
     {
-        // Retrieve the key from the Secret Manager (or Environment Variables in production)
-        var secretKey = configuration["Jwt:Key"] 
-            ?? throw new InvalidOperationException("JWT Secret Key is missing from configuration.");
+        var jwtKey = _configuration["Jwt:Key"] 
+            ?? Environment.GetEnvironmentVariable("KK_JWT_KEY") 
+            ?? throw new InvalidOperationException("JWT Secret Key is missing from the environment configuration.");
             
-        var securityKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(secretKey));
-        var credentials = new SigningCredentials(securityKey, SecurityAlgorithms.HmacSha256);
+        var key = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(jwtKey));
+        var credentials = new SigningCredentials(key, SecurityAlgorithms.HmacSha256);
 
-        // Define the claims payload
-        var descriptor = new SecurityTokenDescriptor
+        var claims = new List<Claim>
         {
-            Subject = new ClaimsIdentity(
-            [
-                new Claim(JwtRegisteredClaimNames.Sub, user.Id.ToString()),
-                new Claim(JwtRegisteredClaimNames.Email, user.Email),
-                new Claim("name", user.DisplayName),
-                new Claim("avatar", user.AvatarUrl)
-            ]),
-            Expires = DateTime.UtcNow.AddDays(7),
-            SigningCredentials = credentials,
-            Issuer = "KindleKeep-Auth",
-            Audience = "KindleKeep-Dashboard"
+            new Claim(ClaimTypes.NameIdentifier, user.Id.ToString()),
+            new Claim(ClaimTypes.Email, user.Email ?? string.Empty),
+            new Claim(ClaimTypes.Name, user.DisplayName ?? string.Empty),
+            new Claim("AuthProvider", user.AuthProvider.ToString())
         };
 
-        var handler = new JsonWebTokenHandler();
-        
-        // Generates the stateless, cryptographically signed string
-        return handler.CreateToken(descriptor); 
+        if (!string.IsNullOrWhiteSpace(user.AvatarUrl))
+        {
+            claims.Add(new Claim("AvatarUrl", user.AvatarUrl));
+        }
+
+        var token = new JwtSecurityToken(
+            issuer: "KindleKeep-Auth",
+            audience: "KindleKeep-Dashboard",
+            claims: claims,
+            expires: DateTime.UtcNow.AddHours(24),
+            signingCredentials: credentials);
+
+        return new JwtSecurityTokenHandler().WriteToken(token);
     }
 }

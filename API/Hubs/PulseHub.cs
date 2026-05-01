@@ -1,21 +1,17 @@
-using Microsoft.AspNetCore.Authorization;
+using System.Threading.Tasks;
 using Microsoft.AspNetCore.SignalR;
 
 namespace KindleKeep.Api.API.Hubs;
 
-// Secures the entire Hub, rejecting unauthorized socket connections
-[Authorize]
 public class PulseHub : Hub
 {
-    public override async Task OnConnectedAsync()
+    public async Task SubscribeToMonitor(string monitorId)
     {
-        var userId = Context.UserIdentifier;
-        if (userId != null)
-        {
-            // Groups connections by user for targeted multicasting
-            await Groups.AddToGroupAsync(Context.ConnectionId, userId);
-        }
-        
-        await base.OnConnectedAsync();
+        await Groups.AddToGroupAsync(Context.ConnectionId, monitorId);
+    }
+
+    public async Task UnsubscribeFromMonitor(string monitorId)
+    {
+        await Groups.RemoveFromGroupAsync(Context.ConnectionId, monitorId);
     }
 }

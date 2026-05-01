@@ -1,4 +1,3 @@
-// Program.cs
 using KindleKeep.Api.API.Endpoints;
 using KindleKeep.Api.API.Hubs;
 using KindleKeep.Api.Core.Entities;
@@ -145,14 +144,14 @@ app.UseCors("FrontendPolicy");
 app.UseAuthentication();
 app.UseAuthorization();
 
-// Task 15: Public Stay-Awake endpoint to bypass Render's sleep cycle
-app.MapGet("/api/stay-awake", () => TypedResults.Ok(new { status = "awake", timestamp = DateTime.UtcNow })).WithName("StayAwake");
-
+app.MapGet("/api/stay-awake", () => TypedResults.Ok(new StayAwakeResponse("awake", DateTime.UtcNow))).WithName("StayAwake");
 app.MapGet("/health", () => TypedResults.Ok("Healthy")).WithName("GetHealthStatus");
 
 app.MapAuthEndpoints();
 app.MapUserEndpoints();
 app.MapMonitorEndpoints();
+app.MapIncidentEndpoints();
+app.MapVaultEndpoints();
 app.MapHub<PulseHub>("/hubs/pulse");
 
 app.Run();
@@ -185,7 +184,13 @@ app.Run();
 [JsonSerializable(typeof(KindleKeep.Api.Core.DTOs.UptimeLogResponse))]
 [JsonSerializable(typeof(System.Collections.Generic.IEnumerable<KindleKeep.Api.Core.DTOs.UptimeLogResponse>))]
 [JsonSerializable(typeof(KindleKeep.Api.Core.DTOs.UserSettingsResponse))]
+[JsonSerializable(typeof(IncidentResponse))]
+[JsonSerializable(typeof(System.Collections.Generic.List<IncidentResponse>))]
+[JsonSerializable(typeof(StayAwakeResponse))]
 [JsonSerializable(typeof(object))]
+[JsonSerializable(typeof(KindleKeep.Api.Core.DTOs.VaultTargetResponse))]
+[JsonSerializable(typeof(System.Collections.Generic.List<KindleKeep.Api.Core.DTOs.VaultTargetResponse>))]
+[JsonSerializable(typeof(KindleKeep.Api.Core.DTOs.VaultAuditDetail))]
 internal partial class AppJsonSerializerContext : JsonSerializerContext
 {
 }
