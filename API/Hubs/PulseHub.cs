@@ -3,7 +3,7 @@ using Microsoft.AspNetCore.SignalR;
 
 namespace KindleKeep.Api.API.Hubs;
 
-public class PulseHub : Hub
+public sealed class PulseHub : Hub
 {
     public async Task SubscribeToMonitor(string monitorId)
     {

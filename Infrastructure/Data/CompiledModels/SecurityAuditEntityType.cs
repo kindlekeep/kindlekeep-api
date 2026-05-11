@@ -92,7 +92,6 @@ namespace KindleKeep.Api.Infrastructure.Data.CompiledModels
                 fieldInfo: typeof(SecurityAudit).GetField("<RawHeaders>k__BackingField", BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.DeclaredOnly),
                 nullable: true);
             rawHeaders.AddAnnotation("Npgsql:ValueGenerationStrategy", NpgsqlValueGenerationStrategy.None);
-            rawHeaders.AddAnnotation("Relational:ColumnType", "jsonb");
 
             var sslExpiryAt = runtimeEntityType.AddProperty(
                 "SslExpiryAt",

@@ -21,7 +21,7 @@ public static class AuthEndpoints
             var clientId = configuration["Authentication:GitHub:ClientId"] 
                 ?? throw new InvalidOperationException("GitHub ClientId is missing.");
 
-            var redirectUri = $"{context.Request.Scheme}://{context.Request.Host}/api/auth/callback/github";
+            var redirectUri = $"http://localhost:5247/api/auth/callback/github";
             var queryParams = new Dictionary<string, string?>
             {
                 { "client_id", clientId },
@@ -53,7 +53,7 @@ public static class AuthEndpoints
             var clientId = configuration["Authentication:Google:ClientId"] 
                 ?? throw new InvalidOperationException("Google ClientId is missing.");
 
-            var redirectUri = $"{context.Request.Scheme}://{context.Request.Host}/api/auth/callback/google";
+            var redirectUri = $"http://localhost:5247/api/auth/callback/google";
             var queryParams = new Dictionary<string, string?>
             {
                 { "client_id", clientId },
@@ -86,7 +86,7 @@ public static class AuthEndpoints
             var clientId = configuration["Authentication:GitLab:ClientId"] 
                 ?? throw new InvalidOperationException("GitLab ClientId is missing.");
 
-            var redirectUri = $"{context.Request.Scheme}://{context.Request.Host}/api/auth/callback/gitlab";
+            var redirectUri = $"http://localhost:5247/api/auth/callback/gitlab";
             var queryParams = new Dictionary<string, string?>
             {
                 { "client_id", clientId },
@@ -134,7 +134,7 @@ public static class AuthEndpoints
         var clientSecret = configuration[$"{configSection}:ClientSecret"] 
             ?? throw new InvalidOperationException($"{provider} ClientSecret is missing.");
 
-        var redirectUri = $"{context.Request.Scheme}://{context.Request.Host}/api/auth/callback/{provider.ToString().ToLower()}";
+        var redirectUri = $"http://localhost:5247/api/auth/callback/{provider.ToString().ToLower()}";
         var client = httpClientFactory.CreateClient(provider.ToString());
 
         var tokenPayload = new Dictionary<string, string>
@@ -242,8 +242,7 @@ public static class AuthEndpoints
         };
 
         var jwtToken = tokenService.GenerateToken(user);
-        var authResponse = new AuthResponse(jwtToken, user.DisplayName, user.AvatarUrl);
-
-        return Results.Ok(authResponse);
+        
+        return Results.Redirect($"http://localhost:5173/auth-callback?token={jwtToken}");
     }
 }

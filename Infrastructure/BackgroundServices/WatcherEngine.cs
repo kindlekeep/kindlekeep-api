@@ -56,10 +56,10 @@ public class WatcherEngine(
             await using var command = connection.CreateCommand();
             command.CommandText = @"
                 SELECT mt.""Id"", mt.""Url"", mt.""FriendlyName"", mt.""CurrentUptimeStatus"", 
-                       mt.""CurrentSecurityGrade"", mt.""IsActive"", mt.""UserId"", u.""DiscordWebhookUrl"" 
+                       mt.""CurrentSecurityGrade"", mt.""IsActive"", mt.""UserId"", u.""DiscordWebhookUrl"", mt.""FailureCount"" 
                 FROM ""MonitorTargets"" mt
                 INNER JOIN ""Users"" u ON mt.""UserId"" = u.""Id""
-                WHERE mt.""IsActive"" = true";
+                WHERE mt.""IsActive"" = true AND mt.""CurrentUptimeStatus"" != 3";
             
             await using var reader = await command.ExecuteReaderAsync(stoppingToken);
             while (await reader.ReadAsync(stoppingToken))
@@ -72,7 +72,8 @@ public class WatcherEngine(
                     CurrentUptimeStatus = (UptimeStatus)reader.GetInt32(3),
                     CurrentSecurityGrade = reader.GetString(4)[0],
                     IsActive = reader.GetBoolean(5),
-                    UserId = reader.GetGuid(6)
+                    UserId = reader.GetGuid(6),
+                    FailureCount = reader.GetInt32(8)
                 };
                 
                 var webhookUrl = reader.IsDBNull(7) ? null : reader.GetString(7);
@@ -106,7 +107,7 @@ public class WatcherEngine(
                     statusCode = (int)response.StatusCode;
 
                     long tcpHandshake = Math.Max(1, ttfb / 3);
-                    await StreamLogAsync(target.Id.ToString(), $"> [NET] TCP Handshake established in {tcpHandshake}ms.", stoppingToken);
+                    await StreamLogAsync(target.Id.ToString(), $"> [TCP] TCP Handshake established in {tcpHandshake}ms.", stoppingToken);
 
                     var issuer = response.RequestMessage?.RequestUri?.Host ?? "Unknown";
                     await StreamLogAsync(target.Id.ToString(), $"> [TLS] Certificate verified (Issuer: {issuer}).", stoppingToken);
@@ -153,6 +154,28 @@ public class WatcherEngine(
             long initLag = ttfb - (tcpHandshakeStatic + tlsNegotiation);
             bool isColdStart = initLag > 800;
             
+            if (ttfb > 800)
+            {
+                await StreamLogAsync(target.Id.ToString(), "> [INIT] Cold start detected.", stoppingToken);
+            }
+            
+            await StreamLogAsync(target.Id.ToString(), $"> [DTA] Temporal gap analyzed: {initLag}ms variance.", stoppingToken);
+
+            if (status == UptimeStatus.Healthy)
+            {
+                target.FailureCount = 0;
+            }
+            else
+            {
+                target.FailureCount++;
+            }
+
+            if (target.FailureCount >= 3)
+            {
+                status = UptimeStatus.Quarantined;
+                await StreamLogAsync(target.Id.ToString(), "> [AUTH-GUARD] Circuit tripped. Target quarantined to protect resource quota.", stoppingToken);
+            }
+
             char securityGrade = target.CurrentSecurityGrade;
 
             await using (var targetConnection = await dataSource.OpenConnectionAsync(stoppingToken))
@@ -203,13 +226,15 @@ public class WatcherEngine(
                     UPDATE ""MonitorTargets""
                     SET ""CurrentUptimeStatus"" = $1,
                         ""CurrentSecurityGrade"" = $2,
-                        ""UpdatedAt"" = $3
+                        ""UpdatedAt"" = $3,
+                        ""FailureCount"" = $5
                     WHERE ""Id"" = $4";
                 
                 updateCommand.Parameters.Add(new NpgsqlParameter { NpgsqlDbType = NpgsqlDbType.Integer, Value = (int)status });
                 updateCommand.Parameters.Add(new NpgsqlParameter { NpgsqlDbType = NpgsqlDbType.Text, Value = securityGrade.ToString() });
                 updateCommand.Parameters.Add(new NpgsqlParameter { NpgsqlDbType = NpgsqlDbType.TimestampTz, Value = DateTime.UtcNow });
                 updateCommand.Parameters.Add(new NpgsqlParameter { NpgsqlDbType = NpgsqlDbType.Uuid, Value = target.Id });
+                updateCommand.Parameters.Add(new NpgsqlParameter { NpgsqlDbType = NpgsqlDbType.Integer, Value = target.FailureCount });
                 
                 await updateCommand.ExecuteNonQueryAsync(stoppingToken);
             }
@@ -220,7 +245,7 @@ public class WatcherEngine(
             target.CurrentSecurityGrade = securityGrade;
             target.UpdatedAt = DateTime.UtcNow;
 
-            if (uptimeStateChanged)
+            if (uptimeStateChanged && status != UptimeStatus.Quarantined)
             {
                 await alertManager.ProcessUptimeAlertAsync(target, status, webhookUrl, stoppingToken);
             }

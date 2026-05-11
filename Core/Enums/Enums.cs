@@ -11,5 +11,6 @@ public enum UptimeStatus
 {
     Healthy,
     Down,
-    Degraded
+    Degraded,
+    Quarantined
 }

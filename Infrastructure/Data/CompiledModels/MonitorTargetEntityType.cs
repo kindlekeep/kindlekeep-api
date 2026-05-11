@@ -23,7 +23,7 @@ namespace KindleKeep.Api.Infrastructure.Data.CompiledModels
                 "KindleKeep.Api.Core.Entities.MonitorTarget",
                 typeof(MonitorTarget),
                 baseEntityType,
-                propertyCount: 12,
+                propertyCount: 13,
                 navigationCount: 1,
                 foreignKeyCount: 1,
                 unnamedIndexCount: 1,
@@ -54,6 +54,14 @@ namespace KindleKeep.Api.Infrastructure.Data.CompiledModels
                 fieldInfo: typeof(MonitorTarget).GetField("<CurrentUptimeStatus>k__BackingField", BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.DeclaredOnly));
             currentUptimeStatus.SetSentinelFromProviderValue(0);
             currentUptimeStatus.AddAnnotation("Npgsql:ValueGenerationStrategy", NpgsqlValueGenerationStrategy.None);
+
+            var failureCount = runtimeEntityType.AddProperty(
+                "FailureCount",
+                typeof(int),
+                propertyInfo: typeof(MonitorTarget).GetProperty("FailureCount", BindingFlags.Public | BindingFlags.Instance | BindingFlags.DeclaredOnly),
+                fieldInfo: typeof(MonitorTarget).GetField("<FailureCount>k__BackingField", BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.DeclaredOnly),
+                sentinel: 0);
+            failureCount.AddAnnotation("Npgsql:ValueGenerationStrategy", NpgsqlValueGenerationStrategy.None);
 
             var friendlyName = runtimeEntityType.AddProperty(
                 "FriendlyName",
@@ -93,7 +101,6 @@ namespace KindleKeep.Api.Infrastructure.Data.CompiledModels
                 fieldInfo: typeof(MonitorTarget).GetField("<RequestHeaders>k__BackingField", BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.DeclaredOnly),
                 nullable: true);
             requestHeaders.AddAnnotation("Npgsql:ValueGenerationStrategy", NpgsqlValueGenerationStrategy.None);
-            requestHeaders.AddAnnotation("Relational:ColumnType", "jsonb");
 
             var requestTimeout = runtimeEntityType.AddProperty(
                 "RequestTimeout",

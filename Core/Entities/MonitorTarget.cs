@@ -20,6 +20,7 @@ public record MonitorTarget
     public bool IsActive { get; set; } = true;
     public UptimeStatus CurrentUptimeStatus { get; set; } = UptimeStatus.Healthy;
     public char CurrentSecurityGrade { get; set; } = 'U'; // 'U' stands for Untested
+    public int FailureCount { get; set; } = 0;
     public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;
 
     // Navigation property

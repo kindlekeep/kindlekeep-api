@@ -221,7 +221,6 @@ namespace KindleKeep.Api.API.Endpoints
                 return Results.NoContent();
             });
 
-            // Complex logic: Atomic inner join prevents fetching history for unauthorized targets. Results are reversed in memory to display chronologically left-to-right.
             group.MapGet("/{id:guid}/history", async (Guid id, [FromServices] NpgsqlDataSource dataSource, HttpContext context) =>
             {
                 var userIdClaim = context.User.FindFirst(ClaimTypes.NameIdentifier)?.Value 
@@ -261,6 +260,38 @@ namespace KindleKeep.Api.API.Endpoints
 
                 logs.Reverse();
                 return Results.Ok(logs);
+            });
+
+            group.MapPost("/{id:guid}/reset-circuit", async (Guid id, [FromServices] NpgsqlDataSource dataSource, HttpContext context) =>
+            {
+                var userIdClaim = context.User.FindFirst(ClaimTypes.NameIdentifier)?.Value 
+                    ?? context.User.FindFirst("sub")?.Value;
+
+                if (string.IsNullOrEmpty(userIdClaim) || !Guid.TryParse(userIdClaim, out var userId))
+                {
+                    return Results.Unauthorized();
+                }
+
+                await using var connection = await dataSource.OpenConnectionAsync();
+                await using var command = connection.CreateCommand();
+                
+                command.CommandText = @"
+                    UPDATE ""MonitorTargets"" 
+                    SET ""FailureCount"" = 0, ""CurrentUptimeStatus"" = 0, ""UpdatedAt"" = $1 
+                    WHERE ""Id"" = $2 AND ""UserId"" = $3";
+
+                command.Parameters.Add(new NpgsqlParameter { NpgsqlDbType = NpgsqlDbType.TimestampTz, Value = DateTime.UtcNow });
+                command.Parameters.Add(new NpgsqlParameter { NpgsqlDbType = NpgsqlDbType.Uuid, Value = id });
+                command.Parameters.Add(new NpgsqlParameter { NpgsqlDbType = NpgsqlDbType.Uuid, Value = userId });
+
+                var rowsAffected = await command.ExecuteNonQueryAsync();
+
+                if (rowsAffected == 0)
+                {
+                    return Results.NotFound();
+                }
+
+                return Results.NoContent();
             });
 
             return endpoints;

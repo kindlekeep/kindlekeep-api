@@ -21,9 +21,8 @@ namespace KindleKeep.Api.Infrastructure.Data.CompiledModels
                 "KindleKeep.Api.Core.Entities.User",
                 typeof(User),
                 baseEntityType,
-                propertyCount: 7,
+                propertyCount: 9,
                 navigationCount: 1,
-                unnamedIndexCount: 1,
                 keyCount: 1);
 
             var id = runtimeEntityType.AddProperty(
@@ -48,8 +47,25 @@ namespace KindleKeep.Api.Infrastructure.Data.CompiledModels
                 "AvatarUrl",
                 typeof(string),
                 propertyInfo: typeof(User).GetProperty("AvatarUrl", BindingFlags.Public | BindingFlags.Instance | BindingFlags.DeclaredOnly),
-                fieldInfo: typeof(User).GetField("<AvatarUrl>k__BackingField", BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.DeclaredOnly));
+                fieldInfo: typeof(User).GetField("<AvatarUrl>k__BackingField", BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.DeclaredOnly),
+                nullable: true);
             avatarUrl.AddAnnotation("Npgsql:ValueGenerationStrategy", NpgsqlValueGenerationStrategy.None);
+
+            var createdAt = runtimeEntityType.AddProperty(
+                "CreatedAt",
+                typeof(DateTime),
+                propertyInfo: typeof(User).GetProperty("CreatedAt", BindingFlags.Public | BindingFlags.Instance | BindingFlags.DeclaredOnly),
+                fieldInfo: typeof(User).GetField("<CreatedAt>k__BackingField", BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.DeclaredOnly),
+                sentinel: new DateTime(1, 1, 1, 0, 0, 0, 0, DateTimeKind.Unspecified));
+            createdAt.AddAnnotation("Npgsql:ValueGenerationStrategy", NpgsqlValueGenerationStrategy.None);
+
+            var discordWebhookUrl = runtimeEntityType.AddProperty(
+                "DiscordWebhookUrl",
+                typeof(string),
+                propertyInfo: typeof(User).GetProperty("DiscordWebhookUrl", BindingFlags.Public | BindingFlags.Instance | BindingFlags.DeclaredOnly),
+                fieldInfo: typeof(User).GetField("<DiscordWebhookUrl>k__BackingField", BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.DeclaredOnly),
+                nullable: true);
+            discordWebhookUrl.AddAnnotation("Npgsql:ValueGenerationStrategy", NpgsqlValueGenerationStrategy.None);
 
             var displayName = runtimeEntityType.AddProperty(
                 "DisplayName",
@@ -65,6 +81,14 @@ namespace KindleKeep.Api.Infrastructure.Data.CompiledModels
                 fieldInfo: typeof(User).GetField("<Email>k__BackingField", BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.DeclaredOnly));
             email.AddAnnotation("Npgsql:ValueGenerationStrategy", NpgsqlValueGenerationStrategy.None);
 
+            var enableEmailNotifications = runtimeEntityType.AddProperty(
+                "EnableEmailNotifications",
+                typeof(bool),
+                propertyInfo: typeof(User).GetProperty("EnableEmailNotifications", BindingFlags.Public | BindingFlags.Instance | BindingFlags.DeclaredOnly),
+                fieldInfo: typeof(User).GetField("<EnableEmailNotifications>k__BackingField", BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.DeclaredOnly),
+                sentinel: false);
+            enableEmailNotifications.AddAnnotation("Npgsql:ValueGenerationStrategy", NpgsqlValueGenerationStrategy.None);
+
             var externalId = runtimeEntityType.AddProperty(
                 "ExternalId",
                 typeof(string),
@@ -72,21 +96,9 @@ namespace KindleKeep.Api.Infrastructure.Data.CompiledModels
                 fieldInfo: typeof(User).GetField("<ExternalId>k__BackingField", BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.DeclaredOnly));
             externalId.AddAnnotation("Npgsql:ValueGenerationStrategy", NpgsqlValueGenerationStrategy.None);
 
-            var monitorLimit = runtimeEntityType.AddProperty(
-                "MonitorLimit",
-                typeof(int),
-                propertyInfo: typeof(User).GetProperty("MonitorLimit", BindingFlags.Public | BindingFlags.Instance | BindingFlags.DeclaredOnly),
-                fieldInfo: typeof(User).GetField("<MonitorLimit>k__BackingField", BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.DeclaredOnly),
-                sentinel: 0);
-            monitorLimit.AddAnnotation("Npgsql:ValueGenerationStrategy", NpgsqlValueGenerationStrategy.None);
-
             var key = runtimeEntityType.AddKey(
                 new[] { id });
             runtimeEntityType.SetPrimaryKey(key);
-
-            var index = runtimeEntityType.AddIndex(
-                new[] { externalId },
-                unique: true);
 
             return runtimeEntityType;
         }

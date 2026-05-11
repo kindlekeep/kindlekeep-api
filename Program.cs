@@ -48,12 +48,17 @@ builder.Services.AddCors(options =>
 {
     options.AddPolicy("FrontendPolicy", policy =>
     {
-        var origins = builder.Configuration["AllowedOrigins"]?.Split(',') ?? Environment.GetEnvironmentVariable("KK_ALLOWED_ORIGINS")?.Split(',') ?? [];
+        var configOrigins = builder.Configuration["AllowedOrigins"]?.Split(',') ?? Environment.GetEnvironmentVariable("KK_ALLOWED_ORIGINS")?.Split(',') ?? Array.Empty<string>();
         
-        policy.WithOrigins(origins)
+        var origins = new List<string>(configOrigins);
+        if (!origins.Contains("http://localhost:5173"))
+        {
+            origins.Add("http://localhost:5173");
+        }
+        
+        policy.WithOrigins(origins.ToArray())
               .AllowAnyMethod()
               .AllowAnyHeader()
-              .WithHeaders("Authorization")
               .AllowCredentials();
     });
 });
@@ -139,6 +144,8 @@ if (app.Environment.IsDevelopment())
 {
     app.MapOpenApi();
 }
+
+app.UseRouting();
 
 app.UseCors("FrontendPolicy");
 app.UseAuthentication();

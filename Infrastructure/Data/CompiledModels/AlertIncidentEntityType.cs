@@ -24,7 +24,7 @@ namespace KindleKeep.Api.Infrastructure.Data.CompiledModels
                 propertyCount: 7,
                 navigationCount: 1,
                 foreignKeyCount: 1,
-                unnamedIndexCount: 2,
+                unnamedIndexCount: 1,
                 keyCount: 1);
 
             var id = runtimeEntityType.AddProperty(
@@ -88,9 +88,6 @@ namespace KindleKeep.Api.Infrastructure.Data.CompiledModels
             runtimeEntityType.SetPrimaryKey(key);
 
             var index = runtimeEntityType.AddIndex(
-                new[] { incidentHash });
-
-            var index0 = runtimeEntityType.AddIndex(
                 new[] { monitorId });
 
             return runtimeEntityType;
